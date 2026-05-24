@@ -11,6 +11,8 @@ from sqlalchemy import delete
 
 from app.db import SessionLocal
 from app.models.entities import (
+    AgentRun,
+    Alert,
     Group,
     KpiSnapshot,
     Portco,
@@ -18,6 +20,7 @@ from app.models.entities import (
     User,
     UserGroupMembership,
 )
+from app.services.rbac import hash_password
 
 TENANTS: list[dict[str, Any]] = [
     {"id": "tenant-acme", "slug": "acme", "name": "Acme Capital Partners"},
@@ -44,6 +47,8 @@ PERIODS: list[str] = [
     "2025-05",
 ]
 
+_DEV_PASSWORD_HASH = hash_password("dev")
+
 USERS: list[dict[str, Any]] = [
     {
         "id": "user-gp",
@@ -51,6 +56,7 @@ USERS: list[dict[str, Any]] = [
         "email": "gp@acme.test",
         "role": "gp",
         "sector": None,
+        "password_hash": _DEV_PASSWORD_HASH,
     },
     {
         "id": "user-analyst-saas",
@@ -58,6 +64,7 @@ USERS: list[dict[str, Any]] = [
         "email": "analyst@acme.test",
         "role": "analyst",
         "sector": "SaaS",
+        "password_hash": _DEV_PASSWORD_HASH,
     },
     {
         "id": "user-lp",
@@ -65,6 +72,7 @@ USERS: list[dict[str, Any]] = [
         "email": "lp@acme.test",
         "role": "lp",
         "sector": None,
+        "password_hash": _DEV_PASSWORD_HASH,
     },
 ]
 
@@ -99,6 +107,9 @@ TRAJECTORIES: dict[str, dict[str, list[float]]] = {
 
 async def main() -> None:
     async with SessionLocal() as session:
+        # Order matters: delete child rows before parents to satisfy FKs.
+        await session.execute(delete(Alert))
+        await session.execute(delete(AgentRun))
         await session.execute(delete(UserGroupMembership))
         await session.execute(delete(User))
         await session.execute(delete(Group))

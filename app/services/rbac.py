@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from functools import wraps
 from typing import Any
 
+import bcrypt
 import jwt
 from fastapi import HTTPException, Request
 from sqlalchemy import select
@@ -15,6 +16,10 @@ from app.models.entities import Role, User
 
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 8
+
+
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
 def issue_token(user: User) -> str:
