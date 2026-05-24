@@ -30,3 +30,6 @@ logs/
 *.db
 *.sqlite
 data/
+
+# Portfolio-Pulse runtime config
+.agents_config.json
