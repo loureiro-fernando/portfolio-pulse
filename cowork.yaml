@@ -1,0 +1,120 @@
+# Anthropic Cowork manifest for Portfolio-Pulse.
+#
+# Cowork lets a team share a deployed Anthropic Managed Agents stack.
+# This manifest documents how Portfolio-Pulse would deploy as a Cowork app.
+# Tested locally; not deployed to real Cowork environment as of v0.1.0.
+
+apiVersion: cowork.anthropic.com/v1
+kind: Application
+metadata:
+  name: portfolio-pulse
+  version: 0.1.0
+  description: Multi-tenant portfolio monitoring with three Managed Agents
+  owner: loureiro.fernando@gmail.com
+
+runtime:
+  language: python
+  version: "3.12"
+  entrypoint: app.main:app
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  healthcheck:
+    path: /health
+    interval_seconds: 30
+    timeout_seconds: 5
+
+dependencies:
+  package_manager: pip
+  install: pip install -e .
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env:
+      POSTGRES_USER: pulse
+      POSTGRES_PASSWORD_SECRET: postgres_password
+      POSTGRES_DB: portfolio_pulse
+    ports: [5432]
+    volumes:
+      - name: pgdata
+        mount: /var/lib/postgresql/data
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    env:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: [16686, 4317, 4318]
+
+secrets:
+  - name: anthropic_api_key
+    env: ANTHROPIC_API_KEY
+    description: Anthropic API key with Managed Agents access
+  - name: slack_bot_token
+    env: SLACK_BOT_TOKEN
+    description: Slack xoxb token for the Portfolio Pulse app
+  - name: jwt_secret
+    env: JWT_SECRET
+    description: 32+ char secret for signing user JWTs
+  - name: scim_bearer_token
+    env: SCIM_BEARER_TOKEN
+    description: Bearer token IdP uses to authenticate to /scim/v2/*
+  - name: postgres_password
+    env: POSTGRES_PASSWORD
+    description: Postgres password
+
+agents:
+  # Created on first run via `python -m app.agents.setup`. IDs persisted to .agents_config.json.
+  - name: portfolio-pulse-anomaly-detector
+    model: claude-haiku-4-5-20251001
+  - name: portfolio-pulse-context-builder
+    model: claude-haiku-4-5-20251001
+  - name: portfolio-pulse-severity-classifier
+    model: claude-haiku-4-5-20251001
+  - name: portfolio-pulse-coordinator
+    model: claude-haiku-4-5-20251001
+    multiagent:
+      type: coordinator
+      delegates:
+        - portfolio-pulse-anomaly-detector
+        - portfolio-pulse-context-builder
+        - portfolio-pulse-severity-classifier
+
+skills:
+  - path: skills/portco-anomaly-monitor
+  - path: skills/lp-update-drafter
+
+bootstrap:
+  - description: Create DB schema
+    command: python -m app.scripts.init_db
+  - description: Seed dev data
+    command: python -m app.scripts.seed
+  - description: Create Managed Agents (idempotent)
+    command: python -m app.agents.setup
+
+endpoints:
+  public:
+    - path: /webhook/{tenant_slug}
+      methods: [POST]
+    - path: /stream/{tenant_slug}
+      methods: [GET]
+    - path: /health
+      methods: [GET]
+    - path: /dashboard
+      methods: [GET]
+  authenticated:
+    - path: /admin/*
+      auth: jwt
+    - path: /scim/v2/*
+      auth: bearer
+      bearer_secret: scim_bearer_token
+
+observability:
+  otel:
+    exporter: otlp_http
+    endpoint_env: OTEL_EXPORTER_OTLP_ENDPOINT
+    service_name: portfolio-pulse
+  jaeger_ui: http://localhost:16686
+
+notes: |
+  Cost: ~$0.06 per anomaly pipeline run with Haiku 4.5. Use Sonnet 4.6 (~$0.10/run) for demos only.
+  Recommended Anthropic workspace spending cap: USD 30.
+  See README.md "Coverage of Mavila JD requirements" for full skill mapping.
