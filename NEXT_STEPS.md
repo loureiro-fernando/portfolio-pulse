@@ -1,171 +1,176 @@
-# Portfolio-Pulse - Próximos passos para retomar a Sessão 2
+# Portfolio-Pulse - Next steps (post Session 3)
 
-Sessão 2 (Épico 4 - pipeline multi-agent) está **implementada e testada localmente**, mas a **validação end-to-end com a API real da Anthropic ainda não rodou**. Faltou esse último passo porque:
+**Status (v0.1.0):** Sessions 1, 2, 3 implementadas. CI verde. 63 unit tests (no I/O) + 10 skill evals (mocked) + Anthropic Managed Agents pipeline validado end-to-end real.
 
-1. As keys `ANTHROPIC_API_KEY` (`portfolio-pulse-dev`) e `SLACK_BOT_TOKEN` foram **expostas no terminal** durante debug do pydantic-settings. Precisam ser revogadas/regeradas antes de executar.
-2. O setup script (`python -m app.agents.setup`) faz `agents.create()` e `environments.create()` reais - requer API key válida.
-
-## Passo 1: Regerar as keys expostas
-
-### Anthropic key
-
-1. https://console.anthropic.com/settings/keys
-2. Delete a key atual `sk-ant-api03-5No...`
-3. Crie nova com mesmo nome `portfolio-pulse-dev`, workspace `Default`
-4. Copie o valor (mostrado uma vez só)
-
-### Slack bot token
-
-1. https://api.slack.com/apps/A0B5E31ALLF/install-on-team
-2. **Reinstall to Workspace** (rotaciona o token, invalida o anterior)
-3. Copie o novo `xoxb-...`
-
-### Atualizar `.env`
-
-```bash
-cd ~/projects_coding/portfolio-pulse
-# Edita .env e troca os dois valores:
-#   ANTHROPIC_API_KEY=<nova-key>
-#   SLACK_BOT_TOKEN=<novo-token>
-```
-
-## Passo 2: Validar end-to-end (Épico 4)
-
-```bash
-cd ~/projects_coding/portfolio-pulse
-source .venv/bin/activate
-
-# Infra (provavelmente ainda está rodando)
-docker compose ps   # confirma postgres + jaeger UP. Se não: make up
-
-# DB: schema + dados de teste
-make init-db
-python -m app.scripts.seed   # 1 tenant "acme", 3 portcos, 108 KPIs
-
-# Cria env + 4 agents na Anthropic (uma vez, persiste em .agents_config.json)
-python -m app.agents.setup
-# Esperado: prints "environment: env_..." + "anomaly agent: agent_..." x4 + "wrote .agents_config.json"
-# Custo: $0 (creates não consomem tokens).
-
-# Sobe API
-make dev   # uvicorn na porta 8000
-```
-
-Em outro terminal:
-
-```bash
-# Abre SSE stream
-curl -N http://localhost:8000/stream/acme
-
-# Em terceiro terminal: dispara um KPI anômalo
-# portco-1 (AcmeCo) tem trajetória de revenue 4.5 -> queda para 3.1 em 2026-04 (-31%)
-curl -X POST http://localhost:8000/webhook/acme \
-  -H "Content-Type: application/json" \
-  -d '{"portco_id":"portco-1","metric":"revenue","value":3.1,"period":"2026-04"}'
-# Esperado: 202 Accepted + {"accepted":true,"tenant":"acme","portco":"portco-1","pipeline":"scheduled"}
-```
-
-**No SSE stream**, esperado nessa ordem (cada evento como `data: {...}\n\n`):
-1. `kpi_received`
-2. `pipeline_started`
-3. `agent_started` (AnomalyDetector) -> `agent_completed`
-4. `agent_started` (ContextBuilder) -> `agent_completed`
-5. `agent_started` (SeverityClassifier) -> `agent_completed`
-6. `pipeline_completed` (com `output` contendo o JSON final do coordinator)
-
-Tempo total esperado: 20-60s com Haiku 4.5.
-
-**Validações pós-pipeline:**
-
-```bash
-# 1. Mensagem no Slack #portfolio-pulse (se severity >= attention)
-#    Esperado: ":rotating_light: *AcmeCo* - <summary>" ou similar
-
-# 2. Spans no Jaeger
-open http://localhost:16686
-# Service: portfolio-pulse
-# Esperado: span raiz "portfolio_pulse.pipeline" com 8+ sub-spans (3 agent threads + tool calls)
-
-# 3. AgentRun no DB
-docker compose exec -T postgres psql -U pulse -d portfolio_pulse -c "SELECT agent_name, input_tokens, output_tokens, cost_usd, latency_ms FROM agent_runs ORDER BY created_at DESC LIMIT 10;"
-# Esperado: linhas para os 3 agents com tokens/cost/latency populados
-
-# 4. Alert no DB
-docker compose exec -T postgres psql -U pulse -d portfolio_pulse -c "SELECT severity, summary, requires_human FROM alerts ORDER BY created_at DESC LIMIT 5;"
-# Esperado: 1 alert com severity = 'attention' ou 'urgent'
-```
-
-## Passo 3: Variações de teste
-
-```bash
-# Caso "NORMAL" (sem anomalia) - 2026-05 com value pequena vs trajetória
-curl -X POST http://localhost:8000/webhook/acme \
-  -H "Content-Type: application/json" \
-  -d '{"portco_id":"portco-2","metric":"revenue","value":3.7,"period":"2026-05"}'
-# Esperado: pipeline roda, AnomalyDetector decide NORMAL, coordinator para,
-# pipeline_completed sem JSON de severidade, sem alert no DB
-
-# Caso "burn anomaly" (portco-3 GammaFin) - burn 6.4 -> 9.5 simula explosão
-curl -X POST http://localhost:8000/webhook/acme \
-  -H "Content-Type: application/json" \
-  -d '{"portco_id":"portco-3","metric":"burn","value":9.5,"period":"2026-05"}'
-# Esperado: severity attention/urgent + alert no Slack
-```
-
-## Passo 4: Debug se algo quebrar
-
-| Sintoma | Causa provável | Fix |
-|---|---|---|
-| Webhook retorna 404 "unknown tenant" | seed não rodou | `python -m app.scripts.seed` |
-| `FileNotFoundError: .agents_config.json` | setup não rodou | `python -m app.agents.setup` |
-| `AuthenticationError` da Anthropic | key inválida ou expirou | Regerar key + atualizar `.env` |
-| `slack_sdk.errors.SlackApiError` | bot não tem permissão no canal ou token inválido | Re-invitar bot + reinstalar app |
-| Sem eventos `agent_*` no SSE | orchestrator quebrou silenciosamente em background | Ver logs do uvicorn (terminal do `make dev`) |
-| Pipeline trava em "running" | tool dispatch falhou ou agent não termina | Conferir logs + olhar `gh run list` na conta Anthropic |
-| Spans não aparecem no Jaeger | Jaeger não está UP ou OTLP exporter errou | `docker compose ps`, verificar porta 4318 |
-
-## O que está implementado (Sessão 2 / Épico 4)
-
-- `app/agents/prompts.py` - System prompts dos 4 agents (3 specialists + coordinator)
-- `app/agents/tools.py` - 8 custom tool schemas + dispatch host-side (Slack/PitchBook/Egnyte/policies/queries)
-- `app/agents/setup.py` - cria env + 4 agents em Cloud (idempotente, persiste IDs)
-- `app/agents/orchestrator.py` - cria session, stream loop, callback de tools, persiste AgentRun + Alert + posta no Slack
-- `app/event_bus.py` - SSE bus por tenant
-- `app/telemetry.py` - OTel OTLP HTTP exporter
-- `app/services/mocks/{pitchbook,egnyte}.py` - mocks com dados realistas
-- `app/services/policies.py` - tenant policies hardcoded
-- `app/services/anomaly_data.py` - queries DB (fetch_history, compare_peers)
-- `app/scripts/seed.py` - dados de teste idempotentes
-- `app/main.py` - webhook agora dispara orchestrator via BackgroundTask, retorna 202
-- `tests/conftest.py` - env dummy para CI
-- `tests/test_{mocks,policies,tools,orchestrator_helpers}.py` - 44 unit tests
-- `README.md` v2 com arquitetura do Épico 4 + custom-tools rationale
-
-**45 tests passando localmente + CI verde** (validado pós-commits).
-
-## O que falta (não tinha como fazer sem você)
-
-- [ ] **Regerar keys expostas** (Passo 1 acima) - bloqueia tudo
-- [ ] **Validação end-to-end real** (Passo 2) - testa que a integração com Managed Agents funciona de verdade. Pode haver ajustes na forma como acesso campos dos eventos (`event.input`, `event.session_thread_id`, etc.) - codei defensivamente com `getattr` mas só rodando dá pra saber.
-- [ ] **Ver Jaeger ao vivo** - se os spans aparecerem certinho ou se preciso ajustar a config do OTel
-
-## Sessão 3 (próximo grande passo, ainda não começado)
-
-- Épico 6: SCIM 2.0 endpoints (`app/api/scim.py`) + RBAC com 3 roles (decorator `@requires_role`)
-- Épico 7: Agent Skills (`skills/portco-anomaly-monitor/SKILL.md` + evals + script)
-- Épico 8: Dashboard HTML/Alpine.js consumindo SSE
-- Épico 9: README final + GIFs + vídeo demo Loom
-- Épico 10: ARCHITECTURE.md + RUNBOOK.md + cowork.yaml
-
-## Custos previstos
-
-Com `AGENT_MODEL=claude-haiku-4-5-20251001` (configurado no .env):
-
-- Cada ciclo do pipeline (3 agents + coordinator): ~5-10k input + 1-3k output ≈ **$0.01-$0.02**
-- Cobertura confortável dentro do crédito de USD 10.86 do workspace.
-
-Para o vídeo demo final, trocar `AGENT_MODEL=claude-sonnet-4-6` no `.env` (1 troca de env var, sem mexer no código). Sonnet custa ~5x mais por ciclo (~$0.05-$0.10) mas qualidade da decisão melhora.
+Este arquivo lista o que falta pra fechar o projeto como peça de portfolio mostrável para o recrutador da Mavila.
 
 ---
 
-**Status enquanto você esteve fora:** 10 commits no main, CI verde, 45 tests passando. Não consegui rodar o setup real porque as keys precisam ser regeradas. Quando voltar, ~10 min de Passo 1+2 acima destrava a validação completa.
+## URGENTE: rotacionar credentials de novo
+
+Durante a Sessão 3, ao tentar editar `.env` para adicionar `SCIM_BEARER_TOKEN`, o `Read` no arquivo expôs **mais uma vez** os valores literais de `ANTHROPIC_API_KEY` e `SLACK_BOT_TOKEN` no transcript da conversa.
+
+Os tokens atuais devem ser considerados comprometidos. Procedimento (5 min):
+
+### Anthropic
+1. https://console.anthropic.com/settings/keys → delete `portfolio-pulse-dev`
+2. Criar nova com mesmo nome
+3. Atualizar `ANTHROPIC_API_KEY=` no `.env` local **via shell direto, sem editor**:
+   ```bash
+   # Substitui só a linha, não revela o valor:
+   sed -i.bak '/^ANTHROPIC_API_KEY=/d' .env && \
+   printf "ANTHROPIC_API_KEY=COLE_AQUI\n" >> .env && rm .env.bak
+   ```
+
+### Slack
+1. https://api.slack.com/apps/A0B5E31ALLF/install-on-team → Reinstall to Workspace
+2. Copiar novo `xoxb-...`
+3. Atualizar no `.env` da mesma forma cega acima.
+
+Não precisa nada de Anthropic re-criar (os `agent_id` em `.agents_config.json` continuam válidos - só a auth muda).
+
+---
+
+## O que falta pra fechar a Sessão 3 (Épico 9)
+
+### 1. Vídeo demo Loom (3-5 min)
+
+Eu não consigo gravar - precisa ser você. Sugestão de roteiro:
+
+```
+0:00-0:20  Pitch curto:
+  "Portfolio-Pulse: multi-tenant portfolio monitoring para PE firms.
+   Três Anthropic Managed Agents detectam anomalia, enriquecem contexto,
+   classificam severidade. Acabei de validar end-to-end."
+
+0:20-0:50  Tour do repo no GitHub:
+  README badges (CI verde, License, Python),
+  estrutura do app/, mapping table do JD Mavila.
+
+0:50-1:40  Demo ao vivo:
+  - Abrir dashboard em /dashboard/ (mostra heatmap + alert feed vazio)
+  - Em outro terminal: curl POST /webhook/acme com revenue=3.1
+  - Voltar pro dashboard: eventos kpi_received -> pipeline_started -> agent_started x3 chegando ao vivo
+  - Esperar ~60s -> alert urgent aparece no feed + Slack notifica
+
+1:40-2:10  Mostrar Jaeger:
+  http://localhost:16686 -> service portfolio-pulse -> trace -> 12 spans em cascata
+  (anomaly, context, severity + 8 tool calls)
+
+2:10-2:40  Mostrar DB:
+  docker compose exec postgres psql ... SELECT * FROM agent_runs
+  -> 4 linhas com tokens/cost/latency reais
+  -> $0.06 por run
+
+2:40-3:10  Mostrar Skills + SCIM + RBAC:
+  - cat skills/portco-anomaly-monitor/SKILL.md (3s)
+  - curl /auth/login + /admin/portcos como GP (3 portcos)
+  - curl /admin/portcos como Analyst SaaS (1 portco) - "scoping"
+  - curl -H "Authorization: Bearer $SCIM" /scim/v2/Users -> ListResponse RFC 7644
+
+3:10-3:30  Wrap:
+  "Custos: $4 total durante o desenvolvimento. Repo público
+   no GitHub, MIT licensed. Documentação em ARCHITECTURE.md
+   e RUNBOOK.md. Pronto pra discussão técnica."
+```
+
+Grave no Loom (https://loom.com), copie link público, cole no README na seção "Demo video".
+
+### 2. GIFs animados (opcional mas alto impacto)
+
+GIFs no GitHub README rodam sozinhos. Dois principais:
+- Dashboard atualizando ao vivo enquanto o pipeline roda
+- Jaeger UI mostrando os 12 spans em cascata
+
+Ferramentas no Mac:
+- `Cmd+Shift+5` -> record selected area -> salva .mov
+- `ffmpeg -i screen.mov -vf "fps=10,scale=800:-1" -c:v gif demo.gif`
+- Coloca em `docs/gifs/` e referencia no README com `![](docs/gifs/dashboard.gif)`
+
+### 3. Atualizar CV Mavila
+
+Arquivo: `/Users/fernandoloureiro/Library/CloudStorage/GoogleDrive-loureiro.fernando@gmail.com/My Drive/1. Carreira/2. Entrevistas/2026/Mavila/Fernando_Loureiro_CV_Mavila_AIAgentEngineer.docx`
+
+Sugestão de bullet pra inserir na seção mais recente (top):
+
+> **Portfolio-Pulse** (portfolio project, 2026) - Multi-tenant portfolio monitoring para PE firms com 3 Anthropic Managed Agents (AnomalyDetector + ContextBuilder + SeverityClassifier) orquestrados via `multiagent` coordinator, SCIM 2.0 + RBAC com 3 roles, dashboard live via SSE, OpenTelemetry traces por agent. Stack: Python 3.12 / FastAPI / SQLAlchemy 2.0 async / Postgres / Anthropic SDK 0.104. Repo público: github.com/loureiro-fernando/portfolio-pulse
+
+### 4. Atualizar Cover Letter
+
+Mesmo diretório, `Fernando_Loureiro_CoverLetter_Mavila_AIAgentEngineer.docx`.
+
+Adicionar parágrafo após o pivô de positioning:
+
+> Para evidenciar o pivô para builder, construí este fim de semana o **Portfolio-Pulse** (github.com/loureiro-fernando/portfolio-pulse), que cobre os Required Skills do JD em código real: Anthropic Managed Agents API com multi-agent orchestration, Agent Skills com evals, MCP connectors, SCIM 2.0 conforme RFC 7644, RBAC, OpenTelemetry. O README tem um mapa explícito de cada Required Skill para o arquivo onde está implementado.
+
+### 5. (Opcional) Tag de release no GitHub
+
+Já criada localmente no fim da Sessão 3:
+```bash
+git tag -l
+git push origin v0.1.0   # se ainda não pushado
+```
+
+Criar release no GitHub:
+```bash
+gh release create v0.1.0 --title "v0.1.0 - feature-complete MVP" --notes "See README.md and ARCHITECTURE.md"
+```
+
+---
+
+## O que está pronto e funcionando
+
+Todos os arquivos abaixo já existem no repo, testados localmente e em CI:
+
+- **Pipeline multi-agent** (Épico 4): `app/agents/{prompts,tools,setup,orchestrator}.py`
+- **MCP Slack** (Épico 5): `app/mcp_servers/slack_server.py` + `tests/smoke_slack.py`
+- **Mocks PitchBook/Egnyte** (Épico 5): `app/services/mocks/`
+- **SCIM 2.0 + RBAC + JWT** (Épico 6): `app/api/{auth,admin,scim}.py` + `app/services/rbac.py` + `app/services/scim_schemas.py`
+- **Agent Skills** (Épico 7): `skills/portco-anomaly-monitor/` + `skills/lp-update-drafter/` com 10 evals
+- **Dashboard** (Épico 8): `app/static/index.html` em `/dashboard/`
+- **OTel tracing** (Épico 4): `app/telemetry.py` exportando para Jaeger
+- **Docs operacionais** (Épico 10): `ARCHITECTURE.md`, `RUNBOOK.md`, `CONTRIBUTING.md`, `cowork.yaml`
+- **README v3** (Épico 9 parcial): badges + arquitetura + JD coverage table + ethics + what's NOT in MVP
+
+## Validação end-to-end real (concluída em 2026-05-24)
+
+```
+POST /webhook/acme {portco-1, revenue, 3.1, 2026-04}
+  -> 202 Accepted
+  -> pipeline runs 60s
+  -> Slack: "🚨 AcmeCo - Revenue collapsed 31.1% YoY..."
+  -> Jaeger: 12 spans (1 root + 3 agent threads + 8 tool calls)
+  -> Postgres:
+      4 agent_runs (anomaly $0.011, context $0.019, severity $0.013, coordinator $0.020)
+      1 alert urgent + requires_human=true
+  -> SSE stream emitiu: kpi_received, pipeline_started, agent_started x3,
+     agent_completed x3, pipeline_completed (com JSON do verdict)
+  -> Custo total: $0.063 por run
+```
+
+Para refazer essa validação após rotacionar as keys:
+```bash
+make up && make dev      # em dois terminais separados
+# Terceiro terminal:
+curl -X POST http://localhost:8000/webhook/acme -H "Content-Type: application/json" \
+  -d '{"portco_id":"portco-1","metric":"revenue","value":3.1,"period":"2026-04"}'
+```
+
+## Bug cosmético conhecido
+
+`AgentRun.latency_ms = 0` para o thread do coordinator (apenas para ele - os 3 specialists têm latency correta). Causa: o `session.thread_created` event não vem para o thread raiz do coordinator no formato esperado. Não impacta funcionalidade nem custo - só polui a tabela.
+
+Fix futuro (~10 min): capturar tempo do coordinator a partir do `session.created_at` e `session.updated_at` (ou usar `session.stats.active_seconds`).
+
+## Sessão futura: hardening pré-produção
+
+Se o projeto fosse evoluir para produção, em ordem de prioridade:
+
+1. Real password verification (`bcrypt.checkpw`) - 5 linhas em `app/api/auth.py`
+2. Alembic migrations - hoje usa `Base.metadata.create_all` que não suporta evolução
+3. Postgres RLS multi-tenant - hoje filtragem é application-layer
+4. Job queue persistente (RQ/ARQ) - hoje `BackgroundTasks` morre se uvicorn restarta
+5. SSE fan-out via `LISTEN/NOTIFY` - hoje single-process
+6. SCIM PATCH endpoint - Okta usa para partial updates
+7. Audit log table com RLS
+8. Per-tenant cost budget enforcement
