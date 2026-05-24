@@ -1,12 +1,18 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.admin import router as admin_router
+from app.api.auth import router as auth_router
+from app.api.scim import router as scim_router
 from app.config import settings  # noqa: F401  (forces .env validation at startup)
 from app.db import SessionLocal
 from app.event_bus import emit, get_queue
@@ -20,7 +26,15 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
 
-app = FastAPI(title="Portfolio-Pulse", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Portfolio-Pulse", version="0.3.0", lifespan=lifespan)
+
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(scim_router)
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.exists():
+    app.mount("/dashboard", StaticFiles(directory=str(_STATIC_DIR), html=True), name="dashboard")
 
 
 class KpiPayload(BaseModel):
@@ -32,7 +46,7 @@ class KpiPayload(BaseModel):
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok", "version": "0.3.0"}
 
 
 @app.post("/webhook/{tenant_slug}", status_code=202)
@@ -99,6 +113,3 @@ async def stream(tenant_slug: str) -> StreamingResponse:
                 yield ": keepalive\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-import asyncio  # noqa: E402  (imported here to keep stream block self-contained)
