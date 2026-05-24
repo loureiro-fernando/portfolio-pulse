@@ -214,6 +214,20 @@ async def run_pipeline(
             thread_usage[tid]["output_tokens"] = int(usage.get("output_tokens", 0))
             thread_usage[tid]["cache_read_tokens"] = int(usage.get("cache_read_input_tokens", 0))
 
+        # Coordinator thread doesn't emit session.thread_created in the expected shape,
+        # so its latency_ms stays 0 above. Fall back to the session's active_seconds
+        # (from the Managed Agents API) for any thread we couldn't measure locally.
+        try:
+            full_session = await client.beta.sessions.retrieve(session.id)
+            stats = getattr(full_session, "stats", None)
+            session_active_ms = int(getattr(stats, "active_seconds", 0) * 1000) if stats else 0
+        except Exception:  # noqa: BLE001
+            session_active_ms = 0
+
+        for data in thread_usage.values():
+            if data.get("latency_ms", 0) == 0 and session_active_ms > 0:
+                data["latency_ms"] = session_active_ms
+
         await emit(
             tenant_slug,
             {
