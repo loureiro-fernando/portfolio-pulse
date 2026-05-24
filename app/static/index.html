@@ -1,0 +1,662 @@
+<!doctype html>
+<!--
+  Portfolio-Pulse Dashboard (Epic 8)
+  ----------------------------------
+  Self-contained HTML. Tudo via CDN (Alpine 3 + Chart.js 4 + Tailwind).
+
+  IMPORTANTE: o EventSource aponta para /stream/{tenant} (mesma origem).
+  Para funcionar de verdade, sirva via FastAPI. Sugestao de mount:
+
+      from fastapi.staticfiles import StaticFiles
+      app.mount("/dashboard", StaticFiles(directory="app/static", html=True), name="dashboard")
+
+  Depois acesse http://127.0.0.1:8000/dashboard/dashboard.html
+  (ou renomeie para index.html e use /dashboard/).
+
+  Abrir via file:// funciona visualmente mas SSE/POST falham por CORS/origin.
+  Nesse caso o dashboard mostra "disconnected" e auto-tenta reconectar.
+-->
+<html lang="pt-BR" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Portfolio-Pulse - Dashboard</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'system-ui', 'sans-serif'],
+            },
+            colors: {
+              brand: {
+                bg: '#0b1120',
+                panel: '#111827',
+                border: '#1f2937',
+              },
+            },
+          },
+        },
+      };
+    </script>
+
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      [x-cloak] { display: none !important; }
+      .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+      .scroll-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+      .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+      @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+      .pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+    </style>
+  </head>
+
+  <body class="bg-slate-900 text-slate-100 font-sans antialiased min-h-screen">
+    <div
+      x-data="dashboard()"
+      x-init="init()"
+      x-cloak
+      class="flex flex-col min-h-screen"
+    >
+      <!-- ============ HEADER ============ -->
+      <header
+        class="flex items-center justify-between gap-4 px-6 py-4 border-b border-slate-800 bg-slate-950/60 backdrop-blur sticky top-0 z-20"
+      >
+        <div class="flex items-center gap-3">
+          <div
+            class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-emerald-400 flex items-center justify-center font-bold text-slate-900"
+            aria-hidden="true"
+          >
+            P
+          </div>
+          <div>
+            <h1 class="text-lg font-semibold leading-none">Portfolio-Pulse</h1>
+            <p class="text-xs text-slate-400 mt-1">Realtime portfolio monitoring</p>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+          <label class="text-xs text-slate-400 hidden sm:block" for="tenant">Tenant</label>
+          <select
+            id="tenant"
+            x-model="tenant"
+            @change="reconnect()"
+            class="bg-slate-800 border border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Selecionar tenant"
+          >
+            <option value="acme">acme</option>
+          </select>
+
+          <div
+            class="flex items-center gap-2 text-sm px-3 py-1.5 rounded-md border"
+            :class="connected ? 'border-emerald-700 bg-emerald-900/30 text-emerald-300' : 'border-red-700 bg-red-900/30 text-red-300'"
+            role="status"
+            :aria-label="connected ? 'SSE conectado' : 'SSE desconectado'"
+          >
+            <span
+              class="w-2 h-2 rounded-full"
+              :class="connected ? 'bg-emerald-400 pulse-dot' : 'bg-red-500'"
+              aria-hidden="true"
+            ></span>
+            <span x-text="connected ? 'connected' : 'disconnected'"></span>
+          </div>
+
+          <button
+            type="button"
+            @click="triggerTestAlert()"
+            :disabled="sendingTest"
+            class="text-sm font-medium px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            aria-label="Disparar alerta de teste"
+          >
+            <span x-show="!sendingTest">Trigger test alert</span>
+            <span x-show="sendingTest">Sending...</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- ============ GRID ============ -->
+      <main class="flex-1 grid gap-4 p-4 lg:p-6 grid-cols-1 lg:grid-cols-10 auto-rows-min">
+        <!-- Widget 1: Portfolio Health Heatmap -->
+        <section
+          class="lg:col-span-4 bg-slate-800/40 border border-slate-800 rounded-xl p-5"
+          aria-labelledby="w1-title"
+        >
+          <header class="flex items-center justify-between mb-4">
+            <h2 id="w1-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
+              Portfolio Health
+            </h2>
+            <span class="text-xs text-slate-500">heatmap</span>
+          </header>
+
+          <div class="overflow-x-auto scroll-thin">
+            <table class="w-full text-sm border-separate border-spacing-1" role="grid">
+              <thead>
+                <tr class="text-xs text-slate-400 uppercase">
+                  <th class="text-left font-medium px-2 py-1.5" scope="col">Portco</th>
+                  <template x-for="m in metrics" :key="m">
+                    <th class="text-left font-medium px-2 py-1.5" scope="col" x-text="m"></th>
+                  </template>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="p in portcos" :key="p.id">
+                  <tr>
+                    <th
+                      scope="row"
+                      class="text-left font-medium px-2 py-2 rounded-md bg-slate-900/40 align-top"
+                    >
+                      <div x-text="p.name" class="text-slate-100"></div>
+                      <div x-text="p.sector" class="text-xs text-slate-500 mt-0.5"></div>
+                    </th>
+                    <template x-for="m in metrics" :key="m">
+                      <td
+                        class="rounded-md p-2 align-top transition-colors"
+                        :class="cellColor(healthScores[p.id])"
+                      >
+                        <div class="text-base font-semibold tabular-nums" x-text="cellValue(p.id, m)"></div>
+                        <div class="text-[10px] uppercase tracking-wide opacity-75" x-text="cellPeriod(p.id, m)"></div>
+                      </td>
+                    </template>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <p class="mt-3 text-xs text-slate-500">
+            Score por portco: <span class="text-emerald-400">verde</span> &ge; 80,
+            <span class="text-amber-400">amarelo</span> 50-80,
+            <span class="text-red-400">vermelho</span> &lt; 50.
+          </p>
+        </section>
+
+        <!-- Widget 2: Alert Feed -->
+        <section
+          class="lg:col-span-6 bg-slate-800/40 border border-slate-800 rounded-xl p-5 flex flex-col"
+          aria-labelledby="w2-title"
+        >
+          <header class="flex items-center justify-between mb-4">
+            <h2 id="w2-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
+              Alert Feed
+            </h2>
+            <span class="text-xs text-slate-500" x-text="`${alerts.length} alerts`"></span>
+          </header>
+
+          <div class="space-y-2 overflow-y-auto scroll-thin pr-1 max-h-[420px]" role="log" aria-live="polite">
+            <template x-if="alerts.length === 0">
+              <div class="text-sm text-slate-500 italic py-8 text-center">
+                Nenhum alerta ainda. Use "Trigger test alert" ou aguarde eventos do pipeline.
+              </div>
+            </template>
+
+            <template x-for="a in alerts.slice(0, 20)" :key="a.id">
+              <article
+                class="flex items-start gap-3 p-3 rounded-lg border bg-slate-900/40"
+                :class="severityBorder(a.severity)"
+              >
+                <div class="text-xl leading-none mt-0.5" aria-hidden="true" x-text="severityEmoji(a.severity)"></div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-medium text-sm" x-text="a.portco_name"></span>
+                    <span
+                      class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                      :class="severityBadge(a.severity)"
+                      x-text="a.severity"
+                    ></span>
+                    <template x-if="a.requires_human">
+                      <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-200 border border-amber-700">
+                        requires_human
+                      </span>
+                    </template>
+                  </div>
+                  <p class="text-sm text-slate-300 mt-1 break-words" x-text="a.summary"></p>
+                </div>
+                <time class="text-xs text-slate-500 whitespace-nowrap" x-text="relativeTime(a.ts)"></time>
+              </article>
+            </template>
+          </div>
+        </section>
+
+        <!-- Widget 3: Cost Burndown -->
+        <section
+          class="lg:col-span-5 bg-slate-800/40 border border-slate-800 rounded-xl p-5 hidden md:block"
+          aria-labelledby="w3-title"
+        >
+          <header class="flex items-center justify-between mb-4">
+            <h2 id="w3-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
+              Cost Burndown
+            </h2>
+            <span class="text-xs text-slate-500">
+              cumulative USD - last <span x-text="costHistory.length"></span> runs
+            </span>
+          </header>
+          <div class="relative h-64">
+            <canvas id="costChart" aria-label="Grafico de custo acumulado"></canvas>
+          </div>
+        </section>
+
+        <!-- Widget 4: Agent Activity Timeline -->
+        <section
+          class="lg:col-span-5 bg-slate-800/40 border border-slate-800 rounded-xl p-5 hidden md:flex flex-col"
+          aria-labelledby="w4-title"
+        >
+          <header class="flex items-center justify-between mb-4">
+            <h2 id="w4-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
+              Agent Activity
+            </h2>
+            <span class="text-xs text-slate-500" x-text="`${activities.length} events`"></span>
+          </header>
+
+          <div class="space-y-1.5 overflow-y-auto scroll-thin pr-1 max-h-[260px]" role="log" aria-live="polite">
+            <template x-if="activities.length === 0">
+              <div class="text-sm text-slate-500 italic py-6 text-center">
+                Aguardando atividade dos agentes...
+              </div>
+            </template>
+            <template x-for="act in activities.slice(0, 15)" :key="act.id">
+              <div class="flex items-center gap-3 text-sm py-1.5 px-2 rounded hover:bg-slate-900/40">
+                <span
+                  class="w-2 h-2 rounded-full flex-shrink-0"
+                  :class="agentColor(act.agent)"
+                  aria-hidden="true"
+                ></span>
+                <span class="font-mono text-xs text-slate-400 w-16 flex-shrink-0" x-text="formatTime(act.ts)"></span>
+                <span class="font-medium" x-text="act.agent"></span>
+                <span class="text-slate-400" x-text="act.status"></span>
+                <span class="text-slate-500 text-xs ml-auto tabular-nums" x-show="act.duration_ms !== null" x-text="`${(act.duration_ms / 1000).toFixed(2)}s`"></span>
+              </div>
+            </template>
+          </div>
+        </section>
+      </main>
+
+      <footer class="text-center text-xs text-slate-600 py-4">
+        Portfolio-Pulse Demo - SSE stream: <code class="text-slate-500" x-text="`/stream/${tenant}`"></code>
+      </footer>
+    </div>
+
+    <!-- ============ APP LOGIC ============ -->
+    <script>
+      function dashboard() {
+        return {
+          // --- state ---
+          tenant: 'acme',
+          connected: false,
+          alerts: [],
+          activities: [],
+          sendingTest: false,
+          portcos: [
+            { id: 'portco-1', name: 'AcmeCo', sector: 'SaaS' },
+            { id: 'portco-2', name: 'BetaHealth', sector: 'Healthtech' },
+            { id: 'portco-3', name: 'GammaFin', sector: 'Fintech' },
+          ],
+          metrics: ['revenue', 'burn', 'churn_pct'],
+          healthScores: {},
+          cells: {}, // {portco_id: {metric: {value, period}}}
+          costHistory: [],
+          activeAgents: {}, // {thread_id: {agent, started_at}}
+
+          // --- internals ---
+          _es: null,
+          _reconnectAttempt: 0,
+          _reconnectTimer: null,
+          _chart: null,
+          _nextId: 1,
+
+          // --- lifecycle ---
+          init() {
+            // seed health scores 30-100
+            this.portcos.forEach((p) => {
+              this.healthScores[p.id] = Math.floor(Math.random() * 71) + 30;
+              this.cells[p.id] = {};
+              this.metrics.forEach((m) => {
+                this.cells[p.id][m] = { value: '-', period: '-' };
+              });
+            });
+
+            // seed cost history (10 points growing 0 -> 0.6)
+            this.costHistory = Array.from({ length: 10 }, (_, i) => ({
+              t: `t-${10 - i}`,
+              cost: +((i / 9) * 0.6).toFixed(3),
+            }));
+
+            this.$nextTick(() => this._buildChart());
+            this._connect();
+
+            // refresh relative timestamps every 15s
+            setInterval(() => {
+              this.alerts = [...this.alerts];
+            }, 15000);
+          },
+
+          // --- SSE ---
+          _connect() {
+            try {
+              const url = `/stream/${encodeURIComponent(this.tenant)}`;
+              this._es = new EventSource(url);
+
+              this._es.onopen = () => {
+                this.connected = true;
+                this._reconnectAttempt = 0;
+              };
+
+              this._es.onmessage = (ev) => this._handleEvent(ev);
+
+              this._es.onerror = () => {
+                this.connected = false;
+                this._es && this._es.close();
+                this._es = null;
+                this._scheduleReconnect();
+              };
+            } catch (err) {
+              console.error('SSE connect failed', err);
+              this.connected = false;
+              this._scheduleReconnect();
+            }
+          },
+
+          _scheduleReconnect() {
+            if (this._reconnectTimer) return;
+            const delay = Math.min(1000 * 2 ** this._reconnectAttempt, 30000);
+            this._reconnectAttempt += 1;
+            this._reconnectTimer = setTimeout(() => {
+              this._reconnectTimer = null;
+              this._connect();
+            }, delay);
+          },
+
+          reconnect() {
+            if (this._es) {
+              this._es.close();
+              this._es = null;
+            }
+            this.connected = false;
+            this._reconnectAttempt = 0;
+            if (this._reconnectTimer) {
+              clearTimeout(this._reconnectTimer);
+              this._reconnectTimer = null;
+            }
+            this._connect();
+          },
+
+          _handleEvent(ev) {
+            let data;
+            try {
+              data = JSON.parse(ev.data);
+            } catch {
+              return;
+            }
+            switch (data.type) {
+              case 'connected':
+                this.connected = true;
+                break;
+
+              case 'kpi_received': {
+                const p = data.payload || {};
+                if (p.portco_id && this.cells[p.portco_id] && p.metric) {
+                  this.cells[p.portco_id][p.metric] = {
+                    value: p.value,
+                    period: p.period || '-',
+                  };
+                }
+                break;
+              }
+
+              case 'pipeline_started':
+                this._addActivity({
+                  agent: 'pipeline',
+                  status: 'started',
+                  thread_id: data.session_id || null,
+                });
+                break;
+
+              case 'agent_started':
+                this.activeAgents[data.thread_id] = {
+                  agent: data.agent_name,
+                  started_at: Date.now(),
+                };
+                this._addActivity({
+                  agent: data.agent_name,
+                  status: 'started',
+                  thread_id: data.thread_id,
+                });
+                break;
+
+              case 'agent_completed': {
+                const entry = this.activeAgents[data.thread_id];
+                let dur = null;
+                if (entry) {
+                  dur = Date.now() - entry.started_at;
+                  delete this.activeAgents[data.thread_id];
+                }
+                this._addActivity({
+                  agent: data.agent_name,
+                  status: 'completed',
+                  thread_id: data.thread_id,
+                  duration_ms: dur,
+                });
+                break;
+              }
+
+              case 'pipeline_completed':
+                this._onPipelineCompleted(data);
+                break;
+            }
+          },
+
+          // --- pipeline_completed -> alert + cost ---
+          _onPipelineCompleted(data) {
+            // 1. cost increment
+            const next = +((this.costHistory[this.costHistory.length - 1]?.cost || 0) + 0.06).toFixed(3);
+            this.costHistory.push({ t: `run-${this.costHistory.length + 1}`, cost: next });
+            if (this.costHistory.length > 10) this.costHistory.shift();
+            this._updateChart();
+
+            // 2. parse SeverityClassifier JSON from output
+            const verdict = this._extractSeverityJson(data.output || '');
+            const portcoId = verdict?.portco_id || data.portco_id || 'portco-1';
+            const portco = this.portcos.find((p) => p.id === portcoId) || this.portcos[0];
+
+            if (verdict) {
+              this._pushAlert({
+                portco_id: portco.id,
+                portco_name: portco.name,
+                severity: (verdict.severity || 'info').toLowerCase(),
+                summary: verdict.summary || verdict.rationale || '(no summary)',
+                requires_human: !!verdict.requires_human,
+              });
+
+              // update health score based on severity
+              const sev = (verdict.severity || '').toLowerCase();
+              if (sev === 'urgent') this.healthScores[portco.id] = Math.max(15, this.healthScores[portco.id] - 35);
+              else if (sev === 'attention') this.healthScores[portco.id] = Math.max(40, this.healthScores[portco.id] - 15);
+            } else {
+              this._pushAlert({
+                portco_id: portco.id,
+                portco_name: portco.name,
+                severity: 'info',
+                summary: 'Pipeline completed - NORMAL (no anomaly detected).',
+                requires_human: false,
+              });
+            }
+
+            this._addActivity({
+              agent: 'coordinator',
+              status: 'completed',
+              thread_id: data.session_id,
+            });
+          },
+
+          _extractSeverityJson(text) {
+            if (!text) return null;
+            const match = text.match(/\{[\s\S]*\}/);
+            if (!match) return null;
+            try {
+              const parsed = JSON.parse(match[0]);
+              if (parsed && typeof parsed === 'object' && 'severity' in parsed) return parsed;
+            } catch {}
+            return null;
+          },
+
+          _pushAlert(a) {
+            this.alerts = [
+              { id: this._nextId++, ts: Date.now(), ...a },
+              ...this.alerts,
+            ].slice(0, 50);
+          },
+
+          _addActivity(a) {
+            this.activities = [
+              { id: this._nextId++, ts: Date.now(), duration_ms: null, ...a },
+              ...this.activities,
+            ].slice(0, 30);
+          },
+
+          // --- test alert button ---
+          async triggerTestAlert() {
+            this.sendingTest = true;
+            try {
+              const res = await fetch(`/webhook/${encodeURIComponent(this.tenant)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  portco_id: 'portco-1',
+                  metric: 'revenue',
+                  value: 3.1,
+                  period: '2026-04',
+                }),
+              });
+              if (!res.ok) console.warn('webhook returned', res.status);
+            } catch (err) {
+              console.error('trigger failed', err);
+            } finally {
+              setTimeout(() => (this.sendingTest = false), 600);
+            }
+          },
+
+          // --- chart ---
+          _buildChart() {
+            const ctx = document.getElementById('costChart');
+            if (!ctx || typeof Chart === 'undefined') return;
+            this._chart = new Chart(ctx, {
+              type: 'line',
+              data: {
+                labels: this.costHistory.map((p) => p.t),
+                datasets: [
+                  {
+                    label: 'Cumulative cost (USD)',
+                    data: this.costHistory.map((p) => p.cost),
+                    borderColor: '#818cf8',
+                    backgroundColor: 'rgba(129, 140, 248, 0.15)',
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    borderWidth: 2,
+                  },
+                ],
+              },
+              options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { labels: { color: '#cbd5e1' } },
+                  tooltip: { callbacks: { label: (c) => `$${c.parsed.y.toFixed(3)}` } },
+                },
+                scales: {
+                  x: { ticks: { color: '#94a3b8' }, grid: { color: '#1f2937' } },
+                  y: {
+                    ticks: { color: '#94a3b8', callback: (v) => `$${v}` },
+                    grid: { color: '#1f2937' },
+                    beginAtZero: true,
+                  },
+                },
+              },
+            });
+          },
+
+          _updateChart() {
+            if (!this._chart) return;
+            this._chart.data.labels = this.costHistory.map((p) => p.t);
+            this._chart.data.datasets[0].data = this.costHistory.map((p) => p.cost);
+            this._chart.update('none');
+          },
+
+          // --- helpers ---
+          cellColor(score) {
+            if (score == null) return 'bg-slate-700/30 text-slate-300';
+            if (score >= 80) return 'bg-emerald-600/30 text-emerald-100 border border-emerald-700/40';
+            if (score >= 50) return 'bg-amber-600/30 text-amber-100 border border-amber-700/40';
+            return 'bg-red-600/30 text-red-100 border border-red-700/40';
+          },
+          cellValue(portcoId, metric) {
+            const c = this.cells[portcoId]?.[metric];
+            if (!c || c.value === '-' || c.value == null) return '-';
+            return typeof c.value === 'number' ? c.value : String(c.value);
+          },
+          cellPeriod(portcoId, metric) {
+            return this.cells[portcoId]?.[metric]?.period || '-';
+          },
+          severityEmoji(sev) {
+            const map = { urgent: '!', attention: '~', info: 'i' };
+            return map[sev] || 'i';
+          },
+          severityBorder(sev) {
+            const map = {
+              urgent: 'border-red-700/50',
+              attention: 'border-amber-700/50',
+              info: 'border-slate-700/50',
+            };
+            return map[sev] || 'border-slate-700/50';
+          },
+          severityBadge(sev) {
+            const map = {
+              urgent: 'bg-red-900/60 text-red-200 border border-red-700',
+              attention: 'bg-amber-900/60 text-amber-200 border border-amber-700',
+              info: 'bg-slate-700/60 text-slate-300 border border-slate-600',
+            };
+            return map[sev] || map.info;
+          },
+          agentColor(agent) {
+            if (!agent) return 'bg-slate-500';
+            const a = agent.toLowerCase();
+            if (a.includes('anomaly')) return 'bg-blue-400';
+            if (a.includes('context')) return 'bg-emerald-400';
+            if (a.includes('severity')) return 'bg-purple-400';
+            if (a.includes('coordinator')) return 'bg-orange-400';
+            if (a.includes('pipeline')) return 'bg-indigo-400';
+            return 'bg-slate-400';
+          },
+          formatTime(ts) {
+            const d = new Date(ts);
+            return d.toTimeString().slice(0, 8);
+          },
+          relativeTime(ts) {
+            const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+            if (sec < 60) return `${sec}s ago`;
+            const min = Math.floor(sec / 60);
+            if (min < 60) return `${min} min ago`;
+            const h = Math.floor(min / 60);
+            if (h < 24) return `${h}h ago`;
+            return `${Math.floor(h / 24)}d ago`;
+          },
+        };
+      }
+    </script>
+  </body>
+</html>
