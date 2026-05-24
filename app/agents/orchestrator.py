@@ -129,14 +129,6 @@ async def run_pipeline(
                         {"type": "agent_started", "agent_name": agent_name, "thread_id": thread_id},
                     )
 
-                elif etype == "span.model_request_end":
-                    usage = getattr(event, "model_usage", None)
-                    if usage:
-                        tid = getattr(event, "session_thread_id", None)
-                        if tid and tid in thread_usage:
-                            thread_usage[tid]["input_tokens"] += getattr(usage, "input_tokens", 0)
-                            thread_usage[tid]["output_tokens"] += getattr(usage, "output_tokens", 0)
-
                 elif etype == "session.thread_status_idle":
                     agent_name = getattr(event, "agent_name", "unknown")
                     tid = getattr(event, "session_thread_id", None) or ""
@@ -170,7 +162,7 @@ async def run_pipeline(
 
                     result_event: dict[str, Any] = {
                         "type": "user.custom_tool_result",
-                        "tool_use_id": tool_use_id,
+                        "custom_tool_use_id": tool_use_id,
                         "content": [{"type": "text", "text": result}],
                     }
                     if is_error:
@@ -199,6 +191,28 @@ async def run_pipeline(
 
                 elif etype == "session.status_terminated":
                     break
+
+        # After session ends, fetch real per-thread usage from the API. The stream
+        # events don't carry usage in this SDK version - the threads.list endpoint
+        # exposes input_tokens / output_tokens / cache_read_input_tokens per thread.
+        threads_page = await client.beta.sessions.threads.list(session.id)
+        async for th in threads_page:
+            td = th.model_dump()
+            tid = td.get("id", "")
+            usage = td.get("usage", {}) or {}
+            if tid not in thread_usage:
+                thread_usage[tid] = {
+                    "agent_name": td.get("agent", {}).get("name", "unknown"),
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "latency_ms": 0,
+                }
+            thread_usage[tid]["agent_name"] = td.get("agent", {}).get(
+                "name", thread_usage[tid]["agent_name"]
+            )
+            thread_usage[tid]["input_tokens"] = int(usage.get("input_tokens", 0))
+            thread_usage[tid]["output_tokens"] = int(usage.get("output_tokens", 0))
+            thread_usage[tid]["cache_read_tokens"] = int(usage.get("cache_read_input_tokens", 0))
 
         await emit(
             tenant_slug,
