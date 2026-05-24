@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     database_url: str
     otel_exporter_otlp_endpoint: str
     jwt_secret: str
+    scim_bearer_token: str | None = None
     slack_bot_token: str | None = None
     slack_portfolio_channel: str = "portfolio-pulse"
 
