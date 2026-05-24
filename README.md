@@ -4,57 +4,69 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 
-> Multi-tenant portfolio monitoring platform for private investment firms. Three Anthropic Managed Agents detect anomalies, build context and classify severity, orchestrated by a coordinator agent. Packaged with SCIM, RBAC, SSE streaming and OpenTelemetry tracing per tenant.
+> Multi-tenant portfolio monitoring platform for private investment firms. Three Anthropic Managed Agents detect anomalies, build context and classify severity, orchestrated by a coordinator agent. Packaged as Agent Skills with SCIM 2.0, RBAC, SSE streaming, OpenTelemetry tracing and a live dashboard.
 
-**Status:** v0.2.0 - Session 2 (multi-agent pipeline + custom tools + OTel + persistence). SCIM, dashboard, Agent Skills land in Session 3.
+**Status:** v0.1.0 - feature-complete demo MVP.
 
 ## What it does (60 seconds)
 
 1. Portfolio companies push KPIs to `POST /webhook/{tenant_slug}` - returns 202 immediately, pipeline runs in background.
-2. A **coordinator agent** spins up a Managed Agents session and delegates to three specialists via the multi-agent feature:
-   - **AnomalyDetector** - calls `fetch_history` and `compare_peers` to flag deltas vs. history and sector peer set.
-   - **ContextBuilder** - calls `pitchbook_*`, `egnyte_search_docs` / `egnyte_get_doc_content`, and `slack_read_recent_messages` to enrich the anomaly with documented events and human chatter.
-   - **SeverityClassifier** - calls `get_tenant_policy` and outputs a strict JSON verdict (`severity`, `requires_human`, `summary`, `rationale`).
-3. Each `agent.custom_tool_use` event triggers a callback in our app - the secret-bearing code (Slack token, DB queries, mocks) runs on our side, never inside the cloud container.
+2. A **coordinator agent** spins up an Anthropic Managed Agents session and delegates to three specialists via the `multiagent` feature:
+   - **AnomalyDetector** calls `fetch_history` + `compare_peers` to flag deltas vs. history and sector peers.
+   - **ContextBuilder** calls `pitchbook_*`, `egnyte_*`, `slack_read_recent_messages` to enrich with documented events.
+   - **SeverityClassifier** calls `get_tenant_policy` and outputs a strict JSON verdict (`severity`, `requires_human`, `summary`, `rationale`).
+3. Each `agent.custom_tool_use` event triggers a callback host-side; the cloud container never sees `SLACK_BOT_TOKEN` or the DB URL.
 4. Per-thread token / latency / cost are persisted to `agent_runs`; the alert lands in `alerts` and is mirrored to `#portfolio-pulse` on Slack when severity is `attention` or `urgent`.
-5. Dashboard receives live progress (`pipeline_started`, `agent_started`, `agent_completed`, `pipeline_completed`) via `GET /stream/{tenant_slug}` (SSE).
+5. **Live dashboard** at `/dashboard/` consumes `GET /stream/{tenant_slug}` (SSE) and shows portfolio heatmap, alert feed, cost burndown and agent activity timeline.
 6. Every agent call + tool call shows up as a span in Jaeger (`http://localhost:16686`).
+7. **SCIM 2.0** at `/scim/v2/Users` + `/scim/v2/Groups` lets an IdP (Okta, Azure AD) provision/deprovision users via bearer token.
+8. **RBAC** on `/admin/*` enforces 3 roles (GP, Analyst, LP). Analyst sees only her sector's portcos.
 
 ## Architecture
 
 ```
-POST /webhook/{tenant}                            GET /stream/{tenant}
-       |                                                  ^
-       v                                                  |
-   FastAPI -- persist KpiSnapshot -- emit kpi_received -- |
-       |                                                  |
-       v (BackgroundTask)                                 |
-   Orchestrator                                           |
-       |                                                  |
-       v                                                  |
-   beta.sessions.create(agent=coordinator) ─────────────► |
-       |                                                  |
-   stream events ◄────────── Anthropic Managed Agents ────┤
-       |                              |                   |
-       |    (multi-agent feature)     v                   |
-       |              ┌─ AnomalyDetector ──┐              |
-       |              ├─ ContextBuilder  ──┤  cloud       |
-       |              └─ SeverityClassifier┘  container   |
-       |                                                  |
-       v agent.custom_tool_use                            |
-   tools.dispatch(name, input) ─► host-side execution:    |
-       - fetch_history / compare_peers (Postgres)         |
-       - pitchbook / egnyte mocks (in-memory)             |
-       - slack_read_recent_messages (slack-sdk)           |
-       - get_tenant_policy (in-memory)                    |
-       ─► user.custom_tool_result back to session         |
-       |                                                  |
-       v session.status_idle (terminal)                   |
-   persist AgentRun per thread + Alert + post_alert_to_slack
-   emit pipeline_completed ───────────────────────────────┘
+                    +----------------+
+   IdP (Okta) ----->| /scim/v2/*     |--+
+                    +----------------+  |
+                                        v
+                    +----------------+  +---------+    +----------+
+  Portcos -- POST ->| /webhook/{t}   |->|         |--->| Postgres |
+                    +----------------+  | FastAPI |    +----------+
+                                        |  +OTel  |
+  Dashboard <-- SSE| /stream/{t}    |<-|         |
+  /dashboard       +----------------+  +---------+
+                                        | calls   |
+                                        v         |
+                    +-------------------------+   |
+                    | Orchestrator            |   |
+                    | (BackgroundTask)        |   |
+                    +-------------------------+   |
+                                  |               |
+                                  v               |
+              +-------------------------------+   |
+              | Anthropic Managed Agents      |   |
+              |                               |   |
+              |   Coordinator                 |   |
+              |     -> AnomalyDetector        |   |
+              |     -> ContextBuilder         |   |
+              |     -> SeverityClassifier     |   |
+              |                               |   |
+              +-------------------------------+   |
+                       ^         |                |
+       custom_tool_use |         v custom_tool_result
+                       |   (host-side dispatch)   |
+                  +----+--------------------+     |
+                  | tools.dispatch()        |     |
+                  | - fetch_history (DB) ---+-----+
+                  | - compare_peers (DB) ---+-----+
+                  | - pitchbook_*  (mock)   |
+                  | - egnyte_*     (mock)   |
+                  | - slack_*  (slack-sdk)  |---> Slack #portfolio-pulse
+                  | - get_tenant_policy     |
+                  +-------------------------+
 ```
 
-**Why custom-tools-as-callbacks instead of MCP servers in the agent config:** Managed Agents accepts MCP servers only via HTTP URL (`mcp_servers[].url`). Our Slack MCP server is stdio-based. Wrapping the same operations as custom tools (whose callbacks run host-side in our orchestrator) lets us keep the stdio server as a portable artifact (see `app/mcp_servers/slack_server.py` + `tests/smoke_slack.py`) while still exposing the capability to the agent. Secrets stay host-side - the cloud container never sees `SLACK_BOT_TOKEN` or the DB connection string.
+See `ARCHITECTURE.md` for ADRs and trade-offs.
 
 ## Quickstart
 
@@ -67,117 +79,130 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# Edit .env: fill ANTHROPIC_API_KEY (portfolio-pulse workspace) and SLACK_BOT_TOKEN
+# Edit .env: fill ANTHROPIC_API_KEY (portfolio-pulse workspace), SLACK_BOT_TOKEN, SCIM_BEARER_TOKEN
 
 # Infra
 make up                  # Postgres on :5432, Jaeger UI on :16686
-make init-db             # Creates 6 tables
 
-# Seed test data (1 tenant, 3 portcos, 12 months of KPIs each)
-python -m app.scripts.seed
+# Schema + seed
+make init-db
+python -m app.scripts.seed   # 1 tenant, 3 portcos, 108 KPIs, 3 users, 2 groups
 
-# One-time: create Cloud environment + 4 agents on Anthropic
-# Persists IDs to .agents_config.json (gitignored)
+# Create env + 4 agents on Anthropic (idempotent, ~5s, $0)
 python -m app.agents.setup
 
 # Run
 make dev                 # FastAPI on :8000
 ```
 
-Test the flow in 3 terminals:
+Open `http://127.0.0.1:8000/dashboard/` and trigger a pipeline:
 
 ```bash
-# Terminal 1 - server
-make dev
-
-# Terminal 2 - open SSE stream
-curl -N http://localhost:8000/stream/acme
-
-# Terminal 3 - push KPI (revenue collapse for AcmeCo in 2026-04)
+# Anomaly case: AcmeCo revenue dropped from 4.5 to 3.1 in 2026-04 (-31%)
 curl -X POST http://localhost:8000/webhook/acme \
   -H "Content-Type: application/json" \
   -d '{"portco_id":"portco-1","metric":"revenue","value":3.1,"period":"2026-04"}'
-
-# Webhook returns 202 immediately. Terminal 2 streams:
-#   kpi_received
-#   pipeline_started (session_id)
-#   agent_started (AnomalyDetector)
-#   agent_completed (AnomalyDetector)
-#   agent_started (ContextBuilder)
-#   agent_completed (ContextBuilder)
-#   agent_started (SeverityClassifier)
-#   agent_completed (SeverityClassifier)
-#   pipeline_completed (final coordinator output)
-# Slack channel #portfolio-pulse receives the alert if severity >= attention.
-
-# Jaeger UI - see spans per agent + per tool call
-open http://localhost:16686
+# 202 Accepted -> dashboard shows live agent progress -> ~60s -> Slack alert urgent
 ```
+
+See `RUNBOOK.md` for daily operations, troubleshooting and secret rotation.
 
 ## Coverage of Mavila JD requirements
 
 | Required skill | Location | Status |
 |---|---|---|
-| Managed Agents API, cloud containers, SSE, multi-agent orchestration | `app/agents/setup.py` (coordinator + 3 sub-agents via `multiagent` feature), `app/agents/orchestrator.py` (session + stream) | Session 2 - **done** |
-| Tool use (custom tools) | `app/agents/tools.py` (8 tools, dispatched host-side) | Session 2 - **done** |
-| MCP connectors (Slack real, PitchBook/Egnyte mock) | `app/mcp_servers/slack_server.py` (real stdio), `app/services/mocks/{pitchbook,egnyte}.py` | Session 1/2 - **done** |
-| OpenTelemetry tracing per agent | `app/telemetry.py` (OTLP HTTP exporter), spans in orchestrator wrap pipeline + per-tool-call | Session 2 - **done** |
-| Agent Skills (SKILL.md + evals) | `skills/portco-anomaly-monitor/` | Session 3 - planned |
-| SCIM 2.0 + RBAC | `app/api/scim.py`, `app/api/admin.py` | Session 3 - planned |
-| Python + REST + JSON + SSE | full stack | Session 1 - **done** |
-| Cowork manifest | `cowork.yaml` | Session 3 - planned |
+| Managed Agents API, cloud containers, SSE, multi-agent orchestration | `app/agents/setup.py` (coordinator + 3 sub-agents via `multiagent`), `app/agents/orchestrator.py` (session + stream) | done |
+| Tool use (custom tools, host-side dispatch) | `app/agents/tools.py` (8 tools across the 3 agents) | done |
+| MCP connectors (Slack real, PitchBook/Egnyte mock) | `app/mcp_servers/slack_server.py` (real stdio), `app/services/mocks/{pitchbook,egnyte}.py` | done |
+| Agent Skills (SKILL.md + workflow + evals) | `skills/portco-anomaly-monitor/`, `skills/lp-update-drafter/` (5 evals each) | done |
+| SCIM 2.0 (RFC 7644) | `app/api/scim.py` (Users + Groups, bearer auth) | done |
+| RBAC | `app/services/rbac.py` (`@requires_role` decorator + JWT), 3 roles seeded (GP/Analyst/LP), portco scoping for Analyst | done |
+| OpenTelemetry tracing per agent | `app/telemetry.py` (OTLP HTTP exporter), spans in orchestrator wrap pipeline + per-tool-call | done |
+| Cowork manifest | `cowork.yaml` | done |
+| Python + REST + JSON + SSE | full stack | done |
+| Dashboard (HTML + Alpine.js + Chart.js, no build step) | `app/static/index.html` served at `/dashboard/` | done |
 
 ## Project layout
 
 ```
 app/
-  api/                REST endpoints (SCIM, admin) - Session 3
+  api/
+    auth.py             POST /auth/login -> JWT
+    admin.py            Role-guarded reads (portcos / alerts / agent_runs) with scoping
+    scim.py             SCIM 2.0 Users + Groups (bearer auth)
   agents/
-    prompts.py        System prompts for 4 agents (3 specialists + 1 coordinator)
-    tools.py          Custom tool schemas + host-side dispatch
-    setup.py          One-time creation of environment + 4 agents -> .agents_config.json
-    orchestrator.py   Session lifecycle, stream loop, custom_tool_use callback, persist AgentRun + Alert
-  mcp_servers/        Slack MCP stdio server (portable artifact)
-  models/             SQLAlchemy entities: Tenant, Portco, KpiSnapshot, Alert, User, AgentRun
+    prompts.py          System prompts for the 4 agents
+    tools.py            Custom tool schemas + host-side dispatch
+    setup.py            One-time creation of env + 4 agents -> .agents_config.json
+    orchestrator.py     Session lifecycle, stream loop, custom_tool_use callback, persist AgentRun + Alert
+  mcp_servers/
+    slack_server.py     Standalone stdio MCP server (portable artifact)
+  models/
+    entities.py         Tenant, Portco, KpiSnapshot, Alert, User, AgentRun, Group, UserGroupMembership
+    base.py             DeclarativeBase + naming convention + created_at/updated_at
   services/
-    anomaly_data.py   fetch_history, compare_peers queries against Postgres
-    policies.py       Tenant severity thresholds (hardcoded for MVP)
-    mocks/            In-memory PitchBook + Egnyte stand-ins
-  scripts/            init_db.py, seed.py
-  config.py           pydantic-settings (.env loader)
-  db.py               async engine + session factory
-  event_bus.py        In-memory SSE event bus per tenant
-  telemetry.py        OTel tracer provider + OTLP HTTP exporter
-  main.py             FastAPI app: webhook (BackgroundTask -> orchestrator), SSE stream, /health
-skills/               Agent Skills (Session 3)
-tests/                Unit + smoke tests (45 tests, no I/O dependencies)
+    rbac.py             JWT issue/decode + @requires_role decorator
+    scim_schemas.py     Pydantic models matching RFC 7644
+    anomaly_data.py     fetch_history / compare_peers queries
+    policies.py         Tenant severity thresholds
+    mocks/              In-memory PitchBook + Egnyte stand-ins
+  scripts/
+    init_db.py          Schema creation
+    seed.py             Dev data
+  static/
+    index.html          Single-page dashboard (Alpine.js + Chart.js + Tailwind via CDN)
+  config.py             pydantic-settings (.env loader)
+  db.py                 async engine + session factory
+  event_bus.py          In-memory SSE event bus per tenant
+  telemetry.py          OTel tracer provider + OTLP HTTP exporter
+  main.py               FastAPI app: webhook + SSE + /health + mount routers + mount /dashboard
+skills/
+  portco-anomaly-monitor/  Skill packaging the multi-agent pipeline (SKILL.md + script.py + 5 evals)
+  lp-update-drafter/       Skill generating quarterly LP letter with 3 personas (5 evals)
+tests/                  63 unit tests (no I/O dependencies)
+cowork.yaml             Anthropic Cowork manifest
+ARCHITECTURE.md         Design decisions and trade-offs (ADR-light)
+RUNBOOK.md              Operations, troubleshooting and secret rotation
+CONTRIBUTING.md         Setup + workflow + code style
+NEXT_STEPS.md           Resume guide (handoff doc)
 ```
 
 ## Multi-agent design notes
 
-- **Coordinator agent** holds the `multiagent: {type: "coordinator", agents: [...]}` field. It delegates sequentially: AnomalyDetector -> ContextBuilder -> SeverityClassifier. Short-circuits if AnomalyDetector says NORMAL.
-- **Specialist agents** are independent Managed Agents (each `agents.create()` returns an `agent_id` + `version` we pin in `.agents_config.json`). Updates to a specialist bump its version; the coordinator pins its roster, so a new specialist version requires a coordinator update too.
-- **Custom tool dispatch loop** is in `app/agents/orchestrator.py`. On `agent.custom_tool_use`, we look up `tools.dispatch(name, input)`, await the result, and reply with `user.custom_tool_result` carrying the original `session_thread_id` so the right thread receives it.
-- **Persistence happens after the session goes idle.** We accumulate `model_usage` from `span.model_request_end` events per thread, then write one `AgentRun` per thread with computed `cost_usd`. The final coordinator text is parsed for the SeverityClassifier JSON (regex match on the first object containing a `severity` key) and persisted as an `Alert`.
-- **OTel spans** wrap the full pipeline + each tool call. Token / latency / cost attrs land on the model-request-end events; we mirror them into Jaeger via the `tracer.start_as_current_span` context manager.
+- **Coordinator** holds `multiagent: {type: "coordinator", agents: [...]}`. Delegates sequentially: AnomalyDetector -> ContextBuilder -> SeverityClassifier. Short-circuits if AnomalyDetector says NORMAL.
+- **Specialists** are independent Managed Agents (each `agents.create()` returns an `agent_id` + `version` pinned in `.agents_config.json`).
+- **Custom tool dispatch loop** lives in `app/agents/orchestrator.py`. On `agent.custom_tool_use`, we look up `tools.dispatch(name, input)`, await the result, and reply with `user.custom_tool_result` carrying the original `session_thread_id`.
+- **Persistence happens after the session goes idle.** Per-thread `usage` is fetched via `client.beta.sessions.threads.list()` (the SDK does not surface usage in the event stream).
+- **OTel spans** wrap the full pipeline + each tool call.
 
 ## Ethics
 
-- No real client data anywhere. Faker-generated everywhere; mocks are obviously fake.
+- No real client data. Mocks are obviously fake; faker-generated everywhere.
 - Pre-commit `gitleaks` blocks secret leaks before commit.
 - Repo born fresh - no copying from prior client work.
-- Secrets (Anthropic key, Slack token, DB credentials) live in `.env` (gitignored). They never enter the cloud container - the agent only sees the tool schemas, not the credentials behind them.
+- Secrets (Anthropic key, Slack token, JWT secret, SCIM bearer, DB credentials) live in `.env` (gitignored). They never enter the cloud container - the agent only sees tool schemas, never the credentials behind them.
 
 ## What's NOT in this MVP
 
-- SCIM 2.0 + RBAC (Session 3)
-- Dashboard UI with live SSE consumption (Session 3)
-- Cost burndown chart (Session 3)
-- Agent Skills with eval suites (Session 3)
-- `cowork.yaml` manifest (Session 3)
-- HTTP MCP transport for Slack (current path uses host-side callback wrapping; the stdio server stays as a portable artifact)
+- Real password verification (login is dev-only - any non-empty password works for seeded users; `bcrypt.checkpw` is one line away)
+- SCIM PATCH (only GET/POST/PUT/DELETE; Okta falls back to PUT gracefully)
+- Postgres RLS for tenant isolation (application-layer filtering only)
+- Schema migrations via Alembic (using `Base.metadata.create_all`)
+- Real PitchBook / Egnyte clients (mocks live in `app/services/mocks/`)
+- Live HTTP MCP server for Slack (stdio version exists; custom-tools wrapping is what the agent actually uses - see ADR-002 in `ARCHITECTURE.md`)
+- Multi-worker SSE fan-out (in-memory event bus; Postgres `LISTEN/NOTIFY` is the roadmap)
+- Persistent background jobs (uses FastAPI `BackgroundTasks`; if uvicorn restarts mid-run, the pipeline is lost)
 
-See `BACKLOG_portfolio-pulse.md` (private) for full scope and trade-offs.
+See `ARCHITECTURE.md` for full ADRs and `RUNBOOK.md` for runtime constraints.
+
+## Cost
+
+| Phase | Model | Approx cost per run |
+|---|---|---|
+| Dev / iteration | Haiku 4.5 | $0.06 per anomaly pipeline run |
+| Demo recording | Sonnet 4.6 | $0.20 per anomaly pipeline run |
+
+Default in `.env.example` is Haiku. Switch to Sonnet only when recording the Loom video.
 
 ## License
 
