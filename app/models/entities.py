@@ -65,6 +65,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String)
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     scim_external_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    sector: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class AgentRun(Base):
@@ -78,3 +79,19 @@ class AgentRun(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    display_name: Mapped[str] = mapped_column(String, index=True)
+    scim_external_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+
+
+class UserGroupMembership(Base):
+    __tablename__ = "user_groups"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    group_id: Mapped[str] = mapped_column(ForeignKey("groups.id"), primary_key=True)

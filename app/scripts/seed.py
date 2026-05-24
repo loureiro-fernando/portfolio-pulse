@@ -10,7 +10,14 @@ from typing import Any
 from sqlalchemy import delete
 
 from app.db import SessionLocal
-from app.models.entities import KpiSnapshot, Portco, Tenant
+from app.models.entities import (
+    Group,
+    KpiSnapshot,
+    Portco,
+    Tenant,
+    User,
+    UserGroupMembership,
+)
 
 TENANTS: list[dict[str, Any]] = [
     {"id": "tenant-acme", "slug": "acme", "name": "Acme Capital Partners"},
@@ -37,6 +44,40 @@ PERIODS: list[str] = [
     "2025-05",
 ]
 
+USERS: list[dict[str, Any]] = [
+    {
+        "id": "user-gp",
+        "tenant_id": "tenant-acme",
+        "email": "gp@acme.test",
+        "role": "gp",
+        "sector": None,
+    },
+    {
+        "id": "user-analyst-saas",
+        "tenant_id": "tenant-acme",
+        "email": "analyst@acme.test",
+        "role": "analyst",
+        "sector": "SaaS",
+    },
+    {
+        "id": "user-lp",
+        "tenant_id": "tenant-acme",
+        "email": "lp@acme.test",
+        "role": "lp",
+        "sector": None,
+    },
+]
+
+GROUPS: list[dict[str, Any]] = [
+    {"id": "grp-gps", "tenant_id": "tenant-acme", "display_name": "PE-GPs"},
+    {"id": "grp-analysts", "tenant_id": "tenant-acme", "display_name": "PE-Analysts"},
+]
+
+MEMBERSHIPS: list[dict[str, Any]] = [
+    {"user_id": "user-gp", "group_id": "grp-gps"},
+    {"user_id": "user-analyst-saas", "group_id": "grp-analysts"},
+]
+
 TRAJECTORIES: dict[str, dict[str, list[float]]] = {
     "portco-1": {
         "revenue": [3.2, 3.4, 3.6, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 3.1],
@@ -58,13 +99,21 @@ TRAJECTORIES: dict[str, dict[str, list[float]]] = {
 
 async def main() -> None:
     async with SessionLocal() as session:
+        await session.execute(delete(UserGroupMembership))
+        await session.execute(delete(User))
+        await session.execute(delete(Group))
         await session.execute(delete(KpiSnapshot))
         await session.execute(delete(Portco))
         await session.execute(delete(Tenant))
         await session.flush()
 
         session.add_all([Tenant(**t) for t in TENANTS])
+        await session.flush()
         session.add_all([Portco(**p) for p in PORTCOS])
+        session.add_all([User(**u) for u in USERS])
+        session.add_all([Group(**g) for g in GROUPS])
+        await session.flush()
+        session.add_all([UserGroupMembership(**m) for m in MEMBERSHIPS])
         await session.flush()
 
         for portco_id, metrics in TRAJECTORIES.items():
@@ -85,7 +134,8 @@ async def main() -> None:
         total_kpis = sum(len(v) for traj in TRAJECTORIES.values() for v in traj.values())
         print(
             f"Seeded {len(TENANTS)} tenants, {len(PORTCOS)} portcos, "
-            f"{total_kpis} KPIs at {datetime.now(UTC).isoformat()}"
+            f"{total_kpis} KPIs, {len(USERS)} users, {len(GROUPS)} groups "
+            f"at {datetime.now(UTC).isoformat()}"
         )
 
 
