@@ -100,6 +100,11 @@ async def run_pipeline(
         # Per-thread usage: thread_id -> {agent_name, input, output, latency_ms}
         thread_usage: dict[str, dict[str, Any]] = {}
         thread_start_ts: dict[str, float] = {}
+        # `session.thread_status_idle` fires every time a thread pauses for tool
+        # calls, so without deduping we'd emit `agent_completed` 4-5x per agent.
+        # Same goes for `session.thread_created` on rare retries.
+        started_threads: set[str] = set()
+        completed_threads: set[str] = set()
 
         async with await client.beta.sessions.events.stream(session.id) as stream:
             await client.beta.sessions.events.send(
@@ -124,10 +129,16 @@ async def run_pipeline(
                         "output_tokens": 0,
                         "latency_ms": 0,
                     }
-                    await emit(
-                        tenant_slug,
-                        {"type": "agent_started", "agent_name": agent_name, "thread_id": thread_id},
-                    )
+                    if thread_id not in started_threads:
+                        started_threads.add(thread_id)
+                        await emit(
+                            tenant_slug,
+                            {
+                                "type": "agent_started",
+                                "agent_name": agent_name,
+                                "thread_id": thread_id,
+                            },
+                        )
 
                 elif etype == "session.thread_status_idle":
                     agent_name = getattr(event, "agent_name", "unknown")
@@ -138,10 +149,16 @@ async def run_pipeline(
                         )
                         if tid in thread_usage:
                             thread_usage[tid]["latency_ms"] = elapsed_ms
-                    await emit(
-                        tenant_slug,
-                        {"type": "agent_completed", "agent_name": agent_name, "thread_id": tid},
-                    )
+                    if tid not in completed_threads:
+                        completed_threads.add(tid)
+                        await emit(
+                            tenant_slug,
+                            {
+                                "type": "agent_completed",
+                                "agent_name": agent_name,
+                                "thread_id": tid,
+                            },
+                        )
 
                 elif etype == "agent.custom_tool_use":
                     tool_name = getattr(event, "name", "")
