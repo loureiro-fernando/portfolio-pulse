@@ -15,3 +15,8 @@ os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
 os.environ.setdefault("JWT_SECRET", "dummy-jwt-secret-for-tests-32-chars-min")
 os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-dummy-ci-token")
 os.environ.setdefault("SLACK_PORTFOLIO_CHANNEL", "portfolio-pulse")
+os.environ.setdefault("SCIM_BEARER_TOKEN", "scim-dev-bearer-please-rotate-in-prod")
+
+# Re-export SCIM-specific fixtures so tests can request `scim_client` directly.
+# Use a relative import - `tests` isn't a package on sys.path.
+from conftest_scim import scim_client  # noqa: E402,F401
