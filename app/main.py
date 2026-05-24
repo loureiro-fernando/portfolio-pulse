@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
+from app.api.dashboard_api import router as dashboard_api_router
 from app.api.scim import router as scim_router
 from app.config import settings  # noqa: F401  (forces .env validation at startup)
 from app.db import SessionLocal
@@ -31,6 +32,7 @@ app = FastAPI(title="Portfolio-Pulse", version="0.3.0", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(scim_router)
+app.include_router(dashboard_api_router)
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 if _STATIC_DIR.exists():
