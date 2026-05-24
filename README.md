@@ -177,10 +177,20 @@ NEXT_STEPS.md           Resume guide (handoff doc)
 
 ## Ethics
 
-- No real client data. Mocks are obviously fake; faker-generated everywhere.
+- No real client data. KPIs are hardcoded synthetic trajectories in `app/scripts/seed.py`; PitchBook / Egnyte stand-ins return canned fixtures from `app/services/mocks/`.
 - Pre-commit `gitleaks` blocks secret leaks before commit.
 - Repo born fresh - no copying from prior client work.
 - Secrets (Anthropic key, Slack token, JWT secret, SCIM bearer, DB credentials) live in `.env` (gitignored). They never enter the cloud container - the agent only sees tool schemas, never the credentials behind them.
+
+## Why mocked data (and not public real data)
+
+A reasonable question: SEC EDGAR, yfinance and similar APIs would let me feed real public-company numbers into the pipeline. I deliberately chose synthetic mocks instead. Three reasons:
+
+1. **Wrong use case.** PE/VC firms monitor **private** portcos with monthly/weekly operational KPIs (MRR, CAC, churn, runway). Public-market filings are quarterly accounting metrics (revenue, EBITDA, net income) for **listed** companies. Wiring EDGAR into a tool designed for a PE workflow would look like a mismatch to anyone in the space - and Mavila invests in private companies.
+2. **Wrong cadence.** The pipeline was designed for continuous monitoring (webhook in -> 202 Accepted -> agent runs in ~60s, dashboard updates live). Public filings land every 90 days. Demo would show an empty dashboard 89 days out of every quarter, or require a fake cadence layer on top - which is exactly what mocks already are.
+3. **Determinism matters for a demo.** The seeded `TRAJECTORIES` in `app/scripts/seed.py` were calibrated to look like plausible early-stage SaaS / Healthtech / Fintech curves, with a deliberate revenue collapse and churn spike on AcmeCo in the latest period. Anyone cloning the repo gets the same anomaly, the same alert and the same Slack message - so the recruiter sees the pipeline succeed on the first try, not "sometimes the model decides this is fine".
+
+**Production path is short.** The mocks in `app/services/mocks/{pitchbook,egnyte}.py` and the seed in `app/scripts/seed.py` are isolated behind the same interfaces the real clients would use. Swapping them for live PitchBook / Egnyte / portco-reported data is an integration job (real API keys, real HTTP clients, real data normalization), not an architecture change.
 
 ## What's NOT in this MVP
 
