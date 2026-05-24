@@ -337,11 +337,103 @@
 
             this.$nextTick(() => this._buildChart());
             this._connect();
+            this._loadInitialData();
 
             // refresh relative timestamps every 15s
             setInterval(() => {
               this.alerts = [...this.alerts];
             }, 15000);
+          },
+
+          // --- initial REST fetch (dashboard hydrates from /api/v1/* then lives on SSE) ---
+          async _loadInitialData() {
+            const tenant = encodeURIComponent(this.tenant);
+            // Run in parallel; each is best-effort, fall back to seeded mocks on failure.
+            await Promise.allSettled([
+              this._fetchPortcos(tenant),
+              this._fetchHealth(tenant),
+              this._fetchAlerts(tenant),
+              this._fetchAgentRuns(tenant),
+            ]);
+          },
+
+          async _fetchPortcos(tenant) {
+            const res = await fetch(`/api/v1/portcos?tenant_slug=${tenant}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (Array.isArray(data) && data.length) {
+              this.portcos = data.map((p) => ({ id: p.id, name: p.name, sector: p.sector }));
+              // ensure cells map covers any new portcos
+              this.portcos.forEach((p) => {
+                if (!this.cells[p.id]) {
+                  this.cells[p.id] = {};
+                  this.metrics.forEach((m) => {
+                    this.cells[p.id][m] = { value: '-', period: '-' };
+                  });
+                }
+              });
+            }
+          },
+
+          async _fetchHealth(tenant) {
+            const res = await fetch(`/api/v1/portfolio-health?tenant_slug=${tenant}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!Array.isArray(data)) return;
+            data.forEach((row) => {
+              if (typeof row.health_score === 'number') {
+                this.healthScores[row.portco_id] = row.health_score;
+              }
+              if (row.latest_kpis && this.cells[row.portco_id]) {
+                Object.entries(row.latest_kpis).forEach(([metric, info]) => {
+                  if (this.cells[row.portco_id][metric] && info) {
+                    this.cells[row.portco_id][metric] = {
+                      value: info.value ?? '-',
+                      period: info.period ?? '-',
+                    };
+                  }
+                });
+              }
+            });
+          },
+
+          async _fetchAlerts(tenant) {
+            const res = await fetch(`/api/v1/alerts?tenant_slug=${tenant}&limit=20`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!Array.isArray(data)) return;
+            this.alerts = data.map((a) => ({
+              id: this._nextId++,
+              portco_name: this._portcoName(a.portco_id),
+              severity: a.severity,
+              summary: a.summary,
+              requires_human: a.requires_human,
+              ts: a.created_at || new Date().toISOString(),
+            }));
+          },
+
+          async _fetchAgentRuns(tenant) {
+            const res = await fetch(`/api/v1/agent-runs?tenant_slug=${tenant}&limit=50`);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!Array.isArray(data) || !data.length) return;
+            // Build cumulative cost timeline (oldest -> newest)
+            const sorted = [...data].reverse();
+            let cum = 0;
+            this.costHistory = sorted.map((r, i) => {
+              cum += Number(r.cost_usd || 0);
+              return { t: `run-${i + 1}`, cost: +cum.toFixed(4) };
+            });
+            if (this._chart) {
+              this._chart.data.labels = this.costHistory.map((p) => p.t);
+              this._chart.data.datasets[0].data = this.costHistory.map((p) => p.cost);
+              this._chart.update();
+            }
+          },
+
+          _portcoName(id) {
+            const p = this.portcos.find((x) => x.id === id);
+            return p ? p.name : id;
           },
 
           // --- SSE ---
