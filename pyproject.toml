@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "sqlalchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
     "psycopg[binary]>=3.2",
     "anthropic>=0.34",
     "python-dotenv>=1.0",
@@ -25,6 +25,7 @@ dependencies = [
     "httpx>=0.27",
     "mcp>=0.9",
     "slack-sdk>=3.32",
+    "aiohttp>=3.10",
     "faker>=28.0",
 ]
 
