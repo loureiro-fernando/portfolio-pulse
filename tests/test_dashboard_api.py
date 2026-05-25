@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.api import dashboard_api as dashboard_module
 from app.models.base import Base
 from app.models.entities import AgentRun, Alert, KpiSnapshot, Portco, Tenant
+from app.services.rbac import issue_token
 
 
 @pytest_asyncio.fixture
@@ -82,8 +83,19 @@ def client(session_factory, monkeypatch) -> TestClient:
     return TestClient(app)
 
 
+def _auth_headers() -> dict[str, str]:
+    class UserStub:
+        id = "user-gp"
+        tenant_id = "tenant-acme"
+        email = "gp@acme.test"
+        role = "gp"
+        sector = None
+
+    return {"Authorization": f"Bearer {issue_token(UserStub())}"}
+
+
 def test_portcos_returns_list_for_known_tenant(client: TestClient) -> None:
-    res = client.get("/api/v1/portcos", params={"tenant_slug": "acme"})
+    res = client.get("/api/v1/portcos", params={"tenant_slug": "acme"}, headers=_auth_headers())
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("application/json")
     body = res.json()
@@ -93,12 +105,21 @@ def test_portcos_returns_list_for_known_tenant(client: TestClient) -> None:
 
 
 def test_portcos_returns_404_for_unknown_tenant(client: TestClient) -> None:
-    res = client.get("/api/v1/portcos", params={"tenant_slug": "ghost"})
+    res = client.get("/api/v1/portcos", params={"tenant_slug": "ghost"}, headers=_auth_headers())
     assert res.status_code == 404
 
 
+def test_portcos_requires_bearer_token(client: TestClient) -> None:
+    res = client.get("/api/v1/portcos", params={"tenant_slug": "acme"})
+    assert res.status_code == 401
+
+
 def test_alerts_returns_list_ordered_desc(client: TestClient) -> None:
-    res = client.get("/api/v1/alerts", params={"tenant_slug": "acme", "limit": 10})
+    res = client.get(
+        "/api/v1/alerts",
+        params={"tenant_slug": "acme", "limit": 10},
+        headers=_auth_headers(),
+    )
     assert res.status_code == 200
     body = res.json()
     assert len(body) == 2
@@ -107,12 +128,12 @@ def test_alerts_returns_list_ordered_desc(client: TestClient) -> None:
 
 
 def test_alerts_returns_404_for_unknown_tenant(client: TestClient) -> None:
-    res = client.get("/api/v1/alerts", params={"tenant_slug": "ghost"})
+    res = client.get("/api/v1/alerts", params={"tenant_slug": "ghost"}, headers=_auth_headers())
     assert res.status_code == 404
 
 
 def test_agent_runs_returns_shape(client: TestClient) -> None:
-    res = client.get("/api/v1/agent-runs", params={"tenant_slug": "acme"})
+    res = client.get("/api/v1/agent-runs", params={"tenant_slug": "acme"}, headers=_auth_headers())
     assert res.status_code == 200
     body = res.json()
     assert len(body) == 1
@@ -129,12 +150,14 @@ def test_agent_runs_returns_shape(client: TestClient) -> None:
 
 
 def test_agent_runs_returns_404_for_unknown_tenant(client: TestClient) -> None:
-    res = client.get("/api/v1/agent-runs", params={"tenant_slug": "ghost"})
+    res = client.get("/api/v1/agent-runs", params={"tenant_slug": "ghost"}, headers=_auth_headers())
     assert res.status_code == 404
 
 
 def test_portfolio_health_applies_alert_penalties(client: TestClient) -> None:
-    res = client.get("/api/v1/portfolio-health", params={"tenant_slug": "acme"})
+    res = client.get(
+        "/api/v1/portfolio-health", params={"tenant_slug": "acme"}, headers=_auth_headers()
+    )
     assert res.status_code == 200
     body = res.json()
     by_id = {p["portco_id"]: p for p in body}
@@ -172,14 +195,18 @@ def test_portfolio_health_floors_at_zero(session_factory, monkeypatch) -> None:
     app = FastAPI()
     app.include_router(dashboard_module.router)
     client = TestClient(app)
-    res = client.get("/api/v1/portfolio-health", params={"tenant_slug": "acme"})
+    res = client.get(
+        "/api/v1/portfolio-health", params={"tenant_slug": "acme"}, headers=_auth_headers()
+    )
     assert res.status_code == 200
     by_id = {p["portco_id"]: p for p in res.json()}
     assert by_id["portco-2"]["health_score"] == 0
 
 
 def test_portfolio_health_returns_404_for_unknown_tenant(client: TestClient) -> None:
-    res = client.get("/api/v1/portfolio-health", params={"tenant_slug": "ghost"})
+    res = client.get(
+        "/api/v1/portfolio-health", params={"tenant_slug": "ghost"}, headers=_auth_headers()
+    )
     assert res.status_code == 404
 
 
@@ -208,7 +235,9 @@ def test_portfolio_health_ignores_alerts_older_than_30_days(session_factory, mon
     app = FastAPI()
     app.include_router(dashboard_module.router)
     client = TestClient(app)
-    res = client.get("/api/v1/portfolio-health", params={"tenant_slug": "acme"})
+    res = client.get(
+        "/api/v1/portfolio-health", params={"tenant_slug": "acme"}, headers=_auth_headers()
+    )
     assert res.status_code == 200
     by_id = {p["portco_id"]: p for p in res.json()}
     assert by_id["portco-2"]["health_score"] == 100

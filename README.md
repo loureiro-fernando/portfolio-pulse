@@ -10,14 +10,14 @@
 
 ## What it does (60 seconds)
 
-1. Portfolio companies push KPIs to `POST /webhook/{tenant_slug}` - returns 202 immediately, pipeline runs in background.
+1. Portfolio companies push KPIs to authenticated `POST /webhook/{tenant_slug}` - returns 202 immediately, pipeline runs in background.
 2. A **coordinator agent** spins up an Anthropic Managed Agents session and delegates to three specialists via the `multiagent` feature:
    - **AnomalyDetector** calls `fetch_history` + `compare_peers` to flag deltas vs. history and sector peers.
    - **ContextBuilder** calls `pitchbook_*`, `egnyte_*`, `slack_read_recent_messages` to enrich with documented events.
    - **SeverityClassifier** calls `get_tenant_policy` and outputs a strict JSON verdict (`severity`, `requires_human`, `summary`, `rationale`).
 3. Each `agent.custom_tool_use` event triggers a callback host-side; the cloud container never sees `SLACK_BOT_TOKEN` or the DB URL.
 4. Per-thread token / latency / cost are persisted to `agent_runs`; the alert lands in `alerts` and is mirrored to `#portfolio-pulse` on Slack when severity is `attention` or `urgent`.
-5. **Live dashboard** at `/dashboard/` consumes `GET /stream/{tenant_slug}` (SSE) and shows portfolio heatmap, alert feed, cost burndown and agent activity timeline.
+5. **Live dashboard** at `/dashboard/` logs in through `/auth/login`, consumes authenticated `GET /stream/{tenant_slug}` (SSE) and shows portfolio heatmap, alert feed, cost burndown and agent activity timeline.
 6. Every agent call + tool call shows up as a span in Jaeger (`http://localhost:16686`).
 7. **SCIM 2.0** at `/scim/v2/Users` + `/scim/v2/Groups` lets an IdP (Okta, Azure AD) provision/deprovision users via bearer token.
 8. **RBAC** on `/admin/*` enforces 3 roles (GP, Analyst, LP). Analyst sees only her sector's portcos.
@@ -79,7 +79,8 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# Edit .env: fill ANTHROPIC_API_KEY (portfolio-pulse workspace), SLACK_BOT_TOKEN, SCIM_BEARER_TOKEN
+# Edit .env: fill ANTHROPIC_API_KEY, SLACK_BOT_TOKEN, JWT_SECRET,
+# WEBHOOK_BEARER_TOKEN and SCIM_BEARER_TOKEN
 
 # Infra
 make up                  # Postgres on :5432, Jaeger UI on :16686
@@ -101,13 +102,14 @@ Open `http://127.0.0.1:8000/dashboard/` and trigger a pipeline:
 # Anomaly case: AcmeCo revenue dropped from 4.5 to 3.1 in 2026-04 (-31%)
 curl -X POST http://localhost:8000/webhook/acme \
   -H "Content-Type: application/json" \
+  -H "X-Webhook-Token: $WEBHOOK_BEARER_TOKEN" \
   -d '{"portco_id":"portco-1","metric":"revenue","value":3.1,"period":"2026-04"}'
 # 202 Accepted -> dashboard shows live agent progress -> ~60s -> Slack alert urgent
 ```
 
 See `RUNBOOK.md` for daily operations, troubleshooting and secret rotation.
 
-## Coverage of Mavila JD requirements
+## Coverage of target JD requirements
 
 | Required skill | Location | Status |
 |---|---|---|
@@ -127,7 +129,7 @@ See `RUNBOOK.md` for daily operations, troubleshooting and secret rotation.
 ```
 app/
   api/
-    auth.py             POST /auth/login -> JWT
+    auth.py             POST /auth/login -> JWT (bcrypt password verification)
     admin.py            Role-guarded reads (portcos / alerts / agent_runs) with scoping
     scim.py             SCIM 2.0 Users + Groups (bearer auth)
   agents/
@@ -159,7 +161,7 @@ app/
 skills/
   portco-anomaly-monitor/  Skill packaging the multi-agent pipeline (SKILL.md + script.py + 5 evals)
   lp-update-drafter/       Skill generating quarterly LP letter with 3 personas (5 evals)
-tests/                  63 unit tests (no I/O dependencies)
+tests/                  92 unit tests (no I/O dependencies)
 cowork.yaml             Anthropic Cowork manifest
 ARCHITECTURE.md         Design decisions and trade-offs (ADR-light)
 RUNBOOK.md              Operations, troubleshooting and secret rotation
@@ -178,7 +180,7 @@ NEXT_STEPS.md           Resume guide (handoff doc)
 ## Ethics
 
 - No real client data. KPIs are hardcoded synthetic trajectories in `app/scripts/seed.py`; PitchBook / Egnyte stand-ins return canned fixtures from `app/services/mocks/`.
-- Pre-commit `gitleaks` blocks secret leaks before commit.
+- Pre-commit and GitHub Actions `gitleaks` block secret leaks before commit/merge.
 - Repo born fresh - no copying from prior client work.
 - Secrets (Anthropic key, Slack token, JWT secret, SCIM bearer, DB credentials) live in `.env` (gitignored). They never enter the cloud container - the agent only sees tool schemas, never the credentials behind them.
 
@@ -186,7 +188,7 @@ NEXT_STEPS.md           Resume guide (handoff doc)
 
 A reasonable question: SEC EDGAR, yfinance and similar APIs would let me feed real public-company numbers into the pipeline. I deliberately chose synthetic mocks instead. Three reasons:
 
-1. **Wrong use case.** PE/VC firms monitor **private** portcos with monthly/weekly operational KPIs (MRR, CAC, churn, runway). Public-market filings are quarterly accounting metrics (revenue, EBITDA, net income) for **listed** companies. Wiring EDGAR into a tool designed for a PE workflow would look like a mismatch to anyone in the space - and Mavila invests in private companies.
+1. **Wrong use case.** PE/VC firms monitor **private** portcos with monthly/weekly operational KPIs (MRR, CAC, churn, runway). Public-market filings are quarterly accounting metrics (revenue, EBITDA, net income) for **listed** companies. Wiring EDGAR into a tool designed for a PE workflow would look like a mismatch to anyone in the space - and the funds this tool targets invest in private companies.
 2. **Wrong cadence.** The pipeline was designed for continuous monitoring (webhook in -> 202 Accepted -> agent runs in ~60s, dashboard updates live). Public filings land every 90 days. Demo would show an empty dashboard 89 days out of every quarter, or require a fake cadence layer on top - which is exactly what mocks already are.
 3. **Determinism matters for a demo.** The seeded `TRAJECTORIES` in `app/scripts/seed.py` were calibrated to look like plausible early-stage SaaS / Healthtech / Fintech curves, with a deliberate revenue collapse and churn spike on AcmeCo in the latest period. Anyone cloning the repo gets the same anomaly, the same alert and the same Slack message - so the recruiter sees the pipeline succeed on the first try, not "sometimes the model decides this is fine".
 
@@ -194,7 +196,8 @@ A reasonable question: SEC EDGAR, yfinance and similar APIs would let me feed re
 
 ## What's NOT in this MVP
 
-- Real password verification (login is dev-only - any non-empty password works for seeded users; `bcrypt.checkpw` is one line away)
+- Password reset / OAuth IdP login UX (seeded demo users use bcrypt-hashed password `dev`)
+- Production-grade session hardening (dashboard uses a same-origin httpOnly demo cookie; production should add CSRF protection and `secure=True`)
 - SCIM PATCH (only GET/POST/PUT/DELETE; Okta falls back to PUT gracefully)
 - Postgres RLS for tenant isolation (application-layer filtering only)
 - Schema migrations via Alembic (using `Base.metadata.create_all`)

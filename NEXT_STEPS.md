@@ -1,33 +1,8 @@
 # Portfolio-Pulse - Next steps (post Session 3)
 
-**Status (v0.1.0):** Sessions 1, 2, 3 implementadas. CI verde. 63 unit tests (no I/O) + 10 skill evals (mocked) + Anthropic Managed Agents pipeline validado end-to-end real.
+**Status (v0.1.0):** Sessions 1, 2, 3 implementadas. CI verde. 92 tests (no I/O) + skill evals mocked + Anthropic Managed Agents pipeline validado end-to-end real.
 
-Este arquivo lista o que falta pra fechar o projeto como peça de portfolio mostrável para o recrutador da Mavila.
-
----
-
-## URGENTE: rotacionar credentials de novo
-
-Durante a Sessão 3, ao tentar editar `.env` para adicionar `SCIM_BEARER_TOKEN`, o `Read` no arquivo expôs **mais uma vez** os valores literais de `ANTHROPIC_API_KEY` e `SLACK_BOT_TOKEN` no transcript da conversa.
-
-Os tokens atuais devem ser considerados comprometidos. Procedimento (5 min):
-
-### Anthropic
-1. https://console.anthropic.com/settings/keys → delete `portfolio-pulse-dev`
-2. Criar nova com mesmo nome
-3. Atualizar `ANTHROPIC_API_KEY=` no `.env` local **via shell direto, sem editor**:
-   ```bash
-   # Substitui só a linha, não revela o valor:
-   sed -i.bak '/^ANTHROPIC_API_KEY=/d' .env && \
-   printf "ANTHROPIC_API_KEY=COLE_AQUI\n" >> .env && rm .env.bak
-   ```
-
-### Slack
-1. https://api.slack.com/apps/A0B5E31ALLF/install-on-team → Reinstall to Workspace
-2. Copiar novo `xoxb-...`
-3. Atualizar no `.env` da mesma forma cega acima.
-
-Não precisa nada de Anthropic re-criar (os `agent_id` em `.agents_config.json` continuam válidos - só a auth muda).
+Este arquivo lista o que falta pra fechar o projeto como peça de portfolio mostrável para o recrutador.
 
 ---
 
@@ -45,11 +20,11 @@ Eu não consigo gravar - precisa ser você. Sugestão de roteiro:
 
 0:20-0:50  Tour do repo no GitHub:
   README badges (CI verde, License, Python),
-  estrutura do app/, mapping table do JD Mavila.
+  estrutura do app/, mapping table do JD.
 
 0:50-1:40  Demo ao vivo:
-  - Abrir dashboard em /dashboard/ (mostra heatmap + alert feed vazio)
-  - Em outro terminal: curl POST /webhook/acme com revenue=3.1
+  - Abrir dashboard em /dashboard/, fazer login com `gp@acme.test` / `dev`
+  - Em outro terminal: curl POST /webhook/acme com `X-Webhook-Token` e revenue=3.1
   - Voltar pro dashboard: eventos kpi_received -> pipeline_started -> agent_started x3 chegando ao vivo
   - Esperar ~60s -> alert urgent aparece no feed + Slack notifica
 
@@ -87,9 +62,9 @@ Ferramentas no Mac:
 - `ffmpeg -i screen.mov -vf "fps=10,scale=800:-1" -c:v gif demo.gif`
 - Coloca em `docs/gifs/` e referencia no README com `![](docs/gifs/dashboard.gif)`
 
-### 3. Atualizar CV Mavila
+### 3. Atualizar CV
 
-Arquivo: `/Users/fernandoloureiro/Library/CloudStorage/GoogleDrive-loureiro.fernando@gmail.com/My Drive/1. Carreira/2. Entrevistas/2026/Mavila/Fernando_Loureiro_CV_Mavila_AIAgentEngineer.docx`
+Arquivo do CV (no seu Google Drive de candidaturas).
 
 Sugestão de bullet pra inserir na seção mais recente (top):
 
@@ -97,7 +72,7 @@ Sugestão de bullet pra inserir na seção mais recente (top):
 
 ### 4. Atualizar Cover Letter
 
-Mesmo diretório, `Fernando_Loureiro_CoverLetter_Mavila_AIAgentEngineer.docx`.
+Mesmo diretório, arquivo do Cover Letter.
 
 Adicionar parágrafo após o pivô de positioning:
 
@@ -152,7 +127,9 @@ Para refazer essa validação após rotacionar as keys:
 ```bash
 make up && make dev      # em dois terminais separados
 # Terceiro terminal:
-curl -X POST http://localhost:8000/webhook/acme -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/webhook/acme \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Token: $WEBHOOK_BEARER_TOKEN" \
   -d '{"portco_id":"portco-1","metric":"revenue","value":3.1,"period":"2026-04"}'
 ```
 
@@ -166,7 +143,7 @@ Fix futuro (~10 min): capturar tempo do coordinator a partir do `session.created
 
 Se o projeto fosse evoluir para produção, em ordem de prioridade:
 
-1. Real password verification (`bcrypt.checkpw`) - 5 linhas em `app/api/auth.py`
+1. Password reset / OAuth IdP login UX
 2. Alembic migrations - hoje usa `Base.metadata.create_all` que não suporta evolução
 3. Postgres RLS multi-tenant - hoje filtragem é application-layer
 4. Job queue persistente (RQ/ARQ) - hoje `BackgroundTasks` morre se uvicorn restarta

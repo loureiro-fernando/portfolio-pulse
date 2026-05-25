@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.models.entities import User
-from app.services.rbac import JWT_ALG, decode_token, issue_token, requires_role
+from app.services.rbac import JWT_ALG, current_user, decode_token, issue_token, requires_role
 
 
 def _make_user(role: str = "gp", sector: str | None = None) -> User:
@@ -73,6 +73,17 @@ def _build_app() -> FastAPI:
     return app
 
 
+def _build_cookie_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/me")
+    async def me(request: Request) -> dict[str, Any]:
+        user = await current_user(request)
+        return {"email": user["email"]}
+
+    return app
+
+
 def test_requires_role_allows_matching_role() -> None:
     client = TestClient(_build_app())
     token = issue_token(_make_user(role="gp"))
@@ -92,3 +103,12 @@ def test_requires_role_rejects_missing_token() -> None:
     client = TestClient(_build_app())
     res = client.get("/protected")
     assert res.status_code == 401
+
+
+def test_current_user_accepts_jwt_cookie() -> None:
+    client = TestClient(_build_cookie_app())
+    token = issue_token(_make_user(role="gp"))
+    client.cookies.set("portfolio_pulse_token", token)
+    res = client.get("/me")
+    assert res.status_code == 200
+    assert res.json() == {"email": "user@acme.test"}

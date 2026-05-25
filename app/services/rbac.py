@@ -16,6 +16,7 @@ from app.models.entities import Role, User
 
 JWT_ALG = "HS256"
 JWT_TTL_HOURS = 8
+JWT_COOKIE_NAME = "portfolio_pulse_token"
 
 
 def hash_password(plain: str) -> str:
@@ -43,9 +44,13 @@ def decode_token(token: str) -> dict[str, Any]:
 
 async def current_user(request: Request) -> dict[str, Any]:
     auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return decode_token(auth.split(" ", 1)[1])
+    cookie_token = request.cookies.get(JWT_COOKIE_NAME)
+    if cookie_token:
+        return decode_token(cookie_token)
     if not auth.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
-    return decode_token(auth.split(" ", 1)[1])
 
 
 def requires_role(*allowed: Role | str) -> Callable:

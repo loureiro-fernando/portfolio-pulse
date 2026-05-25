@@ -13,6 +13,7 @@ os.environ.setdefault(
 )
 os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
 os.environ.setdefault("JWT_SECRET", "dummy-jwt-secret-for-tests-32-chars-min")
+os.environ.setdefault("WEBHOOK_BEARER_TOKEN", "dummy-webhook-token-for-tests")
 os.environ.setdefault("SLACK_BOT_TOKEN", "xoxb-dummy-ci-token")
 os.environ.setdefault("SLACK_PORTFOLIO_CHANNEL", "portfolio-pulse")
 os.environ.setdefault("SCIM_BEARER_TOKEN", "scim-dev-bearer-please-rotate-in-prod")

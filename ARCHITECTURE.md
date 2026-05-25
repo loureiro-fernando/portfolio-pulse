@@ -4,14 +4,14 @@ Living document of the high-level design and the trade-offs made along the way. 
 
 ## Goals
 
-1. **Demonstrate the Anthropic Required Skill set** for the Mavila AI Agent Engineer role: Managed Agents API, multi-agent orchestration, Agent Skills with evals, MCP connectors, SCIM 2.0, RBAC, OTel.
+1. **Demonstrate the Anthropic Required Skill set** for the target Senior AI Agent Engineer role: Managed Agents API, multi-agent orchestration, Agent Skills with evals, MCP connectors, SCIM 2.0, RBAC, OTel.
 2. **Look like an enterprise product**, not a sandbox script: Postgres (not SQLite), Docker compose, GitHub Actions CI, pre-commit with `gitleaks`, granular commits, ARCHITECTURE + RUNBOOK + README.
 3. **Stay cheap to run** so a recruiter can clone and reproduce in under 15 minutes on their own Anthropic account.
 
 ## Non-goals
 
 - Production-ready multi-tenant isolation (no Postgres RLS, no per-tenant encryption keys)
-- Real authentication UX (login is dev-only, password check is presence-only)
+- Production authentication UX (demo login uses bcrypt-hashed seeded users)
 - Real MCP connectors for PitchBook or Egnyte (mocks live in `app/services/mocks/`)
 - High availability (single-process FastAPI; pipeline runs in `BackgroundTasks` and dies if the worker restarts)
 
@@ -65,7 +65,7 @@ Living document of the high-level design and the trade-offs made along the way. 
 
 **Decision:** use `client.beta.sessions` + `client.beta.agents` (Managed Agents API, Beta `managed-agents-2026-04-01`) instead of the older `client.messages.create()` + manual tool loop.
 
-**Why:** the Mavila JD lists Managed Agents API as a Required Skill. Using it natively (with `multiagent` coordinator + 3 sub-agents) demonstrates fluency. Cost overhead vs Messages API is ~10-20% in tokens (agent system messages get added by the runtime) - acceptable for a demo.
+**Why:** the target JD lists Managed Agents API as a Required Skill. Using it natively (with `multiagent` coordinator + 3 sub-agents) demonstrates fluency. Cost overhead vs Messages API is ~10-20% in tokens (agent system messages get added by the runtime) - acceptable for a demo.
 
 **Trade-off:** Managed Agents is Beta. Event shapes can shift between SDK versions. Mitigated by defensive `getattr` everywhere in `app/agents/orchestrator.py`. We hit two API quirks during the build (tool_use_id vs custom_tool_use_id; usage not in stream events) and fixed them.
 
@@ -103,14 +103,16 @@ Living document of the high-level design and the trade-offs made along the way. 
 
 ### ADR-006: JWT for RBAC, SCIM bearer for /scim/v2/*
 
-**Decision:** two distinct auth schemes.
+**Decision:** three distinct auth schemes.
 
 - `/auth/login` issues an 8h JWT signed with `JWT_SECRET`. `@requires_role("gp", "analyst")` decorator validates JWT + role claim.
+- `/webhook/{tenant_slug}` accepts either `X-Webhook-Token: <WEBHOOK_BEARER_TOKEN>` for machine ingest or a GP/Analyst JWT for manual demos.
+- `/api/v1/*` requires JWT and is tenant-scoped. `/stream/{tenant_slug}` also requires JWT. The browser dashboard uses the httpOnly same-origin cookie set by `/auth/login` because `EventSource` cannot set authorization headers.
 - `/scim/v2/*` requires `Authorization: Bearer <SCIM_BEARER_TOKEN>` matching env. No JWT - the IdP (Okta, Azure AD) speaks bearer.
 
 **Why:** that is how enterprise IdPs actually integrate. SCIM 2.0 spec assumes shared-secret bearer; user-facing endpoints assume token-per-session. Mixing them would be wrong.
 
-**Trade-off:** in MVP the login password check is presence-only (any non-empty password works for a seeded user). Bcrypt + real password storage is one line away (`bcrypt.checkpw(req.password.encode(), user.password_hash.encode())`) - left as a roadmap item.
+**Trade-off:** the dashboard uses a simple same-origin httpOnly cookie without CSRF protection. That is acceptable for a localhost portfolio demo, but production should add CSRF tokens and `secure=True` cookies behind HTTPS.
 
 ### ADR-007: SCIM 2.0 minimum viable, RFC 7644
 
@@ -170,7 +172,7 @@ Filtering by tenant happens in queries (`WHERE tenant_id = ?`). There is **no Po
 | If you need... | Today | Future |
 |---|---|---|
 | 100+ tenants | Single-process FastAPI | Add a queue (RQ/ARQ); shard event bus; possibly per-tenant Postgres schemas |
-| Real auth | dev-only password check | bcrypt verify + password reset flow + OAuth IdP |
+| Real auth UX | bcrypt seed users + JWT | password reset flow + OAuth IdP + secure cookie session |
 | Real MCP for Slack | custom tool callback host-side | HTTP MCP server mount + agent config update |
 | Cross-worker SSE | `asyncio.Queue` in-process | Postgres `LISTEN/NOTIFY` (payload shape stays the same) |
 | Audit log | application logs | Append-only `audit_log` table + RLS |
@@ -203,7 +205,7 @@ Filtering by tenant happens in queries (`WHERE tenant_id = ?`). There is **no Po
 | `app/config.py` | pydantic-settings (.env loader) |
 | `app/scripts/init_db.py` | Schema creation |
 | `app/scripts/seed.py` | Dev data (1 tenant, 3 portcos, 108 KPIs, 3 users, 2 groups) |
-| `app/static/dashboard.html` | Single-page dashboard (Alpine + Chart.js + Tailwind via CDN) |
+| `app/static/index.html` | Single-page dashboard (Alpine + Chart.js + Tailwind via CDN) |
 | `skills/portco-anomaly-monitor/` | Agent Skill packaging the pipeline |
 | `skills/lp-update-drafter/` | Agent Skill for quarterly LP letter generation |
 | `tests/` | Unit tests (no I/O) |
@@ -216,7 +218,8 @@ Filtering by tenant happens in queries (`WHERE tenant_id = ?`). There is **no Po
 
 | Threat | Mitigation |
 |---|---|
-| Secrets committed to repo | `gitleaks` pre-commit hook, `.env` in `.gitignore`, `.agents_config.json` in `.gitignore` |
+| Secrets committed to repo | `gitleaks` pre-commit hook + GitHub Action, `.env` in `.gitignore`, `.agents_config.json` in `.gitignore` |
+| Unauthenticated cost abuse | `/webhook/{tenant_slug}` requires `WEBHOOK_BEARER_TOKEN` or GP/Analyst JWT |
 | Pipeline cost runaway | Hardcoded Haiku in `.env`, `auto_reload` OFF on Anthropic billing, explicit warning in README |
 | Cross-tenant data leak via agent | All custom tools take `tenant_id` / `portco_id` from request, never trust LLM-generated IDs as-is (TODO: add validator) |
 | SCIM bearer guessable | `SCIM_BEARER_TOKEN` is 32+ chars env-supplied; rotation procedure in RUNBOOK |

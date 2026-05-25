@@ -1,0 +1,9 @@
+[allowlist]
+description = "Repository-owned test placeholders, never production credentials."
+regexes = [
+  '''dummy-jwt-secret-for-tests-32-chars-min''',
+  '''dummy-webhook-token-for-tests''',
+  '''sk-ant-dummy-(ci|eval)-key-do-not-use''',
+  '''xoxb-dummy-(ci|eval)-token''',
+  '''scim-dev-bearer-please-rotate-in-prod''',
+]

@@ -40,6 +40,7 @@ def test_login_returns_jwt_on_valid_credentials(monkeypatch) -> None:
     assert res.status_code == 200
     body = res.json()
     assert body["token_type"] == "bearer"
+    assert "portfolio_pulse_token=" in res.headers["set-cookie"]
     decoded = jwt.decode(body["access_token"], settings.jwt_secret, algorithms=[JWT_ALG])
     assert decoded["email"] == "gp@acme.test"
     assert decoded["role"] == "gp"
@@ -85,6 +86,13 @@ def test_login_rejects_empty_password(monkeypatch) -> None:
     client = TestClient(_build_app())
     res = client.post("/auth/login", json={"email": "gp@acme.test", "password": ""})
     assert res.status_code == 401
+
+
+def test_logout_clears_cookie() -> None:
+    client = TestClient(_build_app())
+    res = client.post("/auth/logout")
+    assert res.status_code == 204
+    assert "portfolio_pulse_token=" in res.headers["set-cookie"]
 
 
 def test_hash_password_roundtrips_with_bcrypt() -> None:

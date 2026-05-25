@@ -23,7 +23,7 @@ pre-commit install
 # 4. Fill secrets (NEVER commit .env)
 cp .env.example .env
 # Edit .env, fill ANTHROPIC_API_KEY (cap at $30 in Anthropic console),
-# SLACK_BOT_TOKEN (xoxb-... from your Slack app), SCIM_BEARER_TOKEN (any 32+ char string)
+# SLACK_BOT_TOKEN, JWT_SECRET, WEBHOOK_BEARER_TOKEN and SCIM_BEARER_TOKEN
 
 # 5. Infra
 make up                    # postgres :5432 + jaeger :16686
@@ -37,7 +37,7 @@ python -m app.agents.setup
 
 # 8. Run
 make dev                   # uvicorn :8000
-# Dashboard: http://127.0.0.1:8000/dashboard/dashboard.html
+# Dashboard: http://127.0.0.1:8000/dashboard/
 # Jaeger:    http://localhost:16686
 ```
 
@@ -63,25 +63,28 @@ make down                  # stops postgres + jaeger
 # Anomaly case (AcmeCo revenue drops 31% in 2026-04)
 curl -X POST http://localhost:8000/webhook/acme \
   -H "Content-Type: application/json" \
+  -H "X-Webhook-Token: $WEBHOOK_BEARER_TOKEN" \
   -d '{"portco_id":"portco-1","metric":"revenue","value":3.1,"period":"2026-04"}'
 # Expected: 202 + ~$0.06 spent + Slack alert + 4 AgentRuns + 1 Alert urgent + 12 Jaeger spans
 
 # Normal case (BetaHealth steady growth)
 curl -X POST http://localhost:8000/webhook/acme \
   -H "Content-Type: application/json" \
+  -H "X-Webhook-Token: $WEBHOOK_BEARER_TOKEN" \
   -d '{"portco_id":"portco-2","metric":"revenue","value":3.7,"period":"2026-05"}'
 # Expected: 202 + pipeline runs but no alert (AnomalyDetector says NORMAL)
 
 # Burn spike (GammaFin)
 curl -X POST http://localhost:8000/webhook/acme \
   -H "Content-Type: application/json" \
+  -H "X-Webhook-Token: $WEBHOOK_BEARER_TOKEN" \
   -d '{"portco_id":"portco-3","metric":"burn","value":9.5,"period":"2026-05"}'
 ```
 
 ## Authenticated routes (admin + SCIM)
 
 ```bash
-# Login as GP (any non-empty password works in MVP - bcrypt is roadmap)
+# Login as GP (seeded dev password: dev)
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"gp@acme.test","password":"dev"}' \
@@ -138,6 +141,13 @@ curl -X POST http://localhost:8000/scim/v2/Users \
 2. Update `JWT_SECRET=` in `.env`
 3. Restart `make dev`
 4. **All existing tokens invalidate** - users must re-login
+
+### Webhook bearer
+
+1. Generate new: same as JWT
+2. Update `WEBHOOK_BEARER_TOKEN=` in `.env`
+3. Restart `make dev`
+4. Update upstream portfolio-company webhook senders
 
 ### SCIM bearer
 

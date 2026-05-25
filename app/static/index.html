@@ -4,14 +4,13 @@
   ----------------------------------
   Self-contained HTML. Tudo via CDN (Alpine 3 + Chart.js 4 + Tailwind).
 
-  IMPORTANTE: o EventSource aponta para /stream/{tenant} (mesma origem).
+  IMPORTANTE: o EventSource aponta para /stream/{tenant} (mesma origem, cookie HttpOnly).
   Para funcionar de verdade, sirva via FastAPI. Sugestao de mount:
 
       from fastapi.staticfiles import StaticFiles
       app.mount("/dashboard", StaticFiles(directory="app/static", html=True), name="dashboard")
 
-  Depois acesse http://127.0.0.1:8000/dashboard/dashboard.html
-  (ou renomeie para index.html e use /dashboard/).
+  Depois acesse http://127.0.0.1:8000/dashboard/.
 
   Abrir via file:// funciona visualmente mas SSE/POST falham por CORS/origin.
   Nesse caso o dashboard mostra "disconnected" e auto-tenta reconectar.
@@ -91,6 +90,41 @@
         </div>
 
         <div class="flex items-center gap-4">
+          <template x-if="!token">
+            <form class="flex items-center gap-2" @submit.prevent="login()">
+              <input
+                type="email"
+                x-model="loginEmail"
+                class="w-40 bg-slate-800 border border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                aria-label="Email"
+              />
+              <input
+                type="password"
+                x-model="loginPassword"
+                class="w-28 bg-slate-800 border border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                aria-label="Password"
+              />
+              <button
+                type="submit"
+                :disabled="loggingIn"
+                class="text-sm font-medium px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                <span x-show="!loggingIn">Login</span>
+                <span x-show="loggingIn">...</span>
+              </button>
+            </form>
+          </template>
+
+          <template x-if="token">
+            <button
+              type="button"
+              @click="logout()"
+              class="text-sm font-medium px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 transition"
+            >
+              Logout
+            </button>
+          </template>
+
           <label class="text-xs text-slate-400 hidden sm:block" for="tenant">Tenant</label>
           <select
             id="tenant"
@@ -119,7 +153,7 @@
           <button
             type="button"
             @click="triggerTestAlert()"
-            :disabled="sendingTest"
+            :disabled="sendingTest || !token"
             class="text-sm font-medium px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
             aria-label="Disparar alerta de teste"
           >
@@ -296,6 +330,10 @@
         return {
           // --- state ---
           tenant: 'acme',
+          token: localStorage.getItem('portfolioPulseAuthenticated') || '',
+          loginEmail: localStorage.getItem('portfolioPulseEmail') || 'gp@acme.test',
+          loginPassword: 'dev',
+          loggingIn: false,
           connected: false,
           alerts: [],
           activities: [],
@@ -336,8 +374,10 @@
             }));
 
             this.$nextTick(() => this._buildChart());
-            this._connect();
-            this._loadInitialData();
+            if (this.token) {
+              this._connect();
+              this._loadInitialData();
+            }
 
             // refresh relative timestamps every 15s
             setInterval(() => {
@@ -347,6 +387,7 @@
 
           // --- initial REST fetch (dashboard hydrates from /api/v1/* then lives on SSE) ---
           async _loadInitialData() {
+            if (!this.token) return;
             const tenant = encodeURIComponent(this.tenant);
             // Run in parallel; each is best-effort, fall back to seeded mocks on failure.
             await Promise.allSettled([
@@ -358,7 +399,9 @@
           },
 
           async _fetchPortcos(tenant) {
-            const res = await fetch(`/api/v1/portcos?tenant_slug=${tenant}`);
+            const res = await fetch(`/api/v1/portcos?tenant_slug=${tenant}`, {
+              headers: this._authHeaders(),
+            });
             if (!res.ok) return;
             const data = await res.json();
             if (Array.isArray(data) && data.length) {
@@ -376,7 +419,9 @@
           },
 
           async _fetchHealth(tenant) {
-            const res = await fetch(`/api/v1/portfolio-health?tenant_slug=${tenant}`);
+            const res = await fetch(`/api/v1/portfolio-health?tenant_slug=${tenant}`, {
+              headers: this._authHeaders(),
+            });
             if (!res.ok) return;
             const data = await res.json();
             if (!Array.isArray(data)) return;
@@ -388,8 +433,8 @@
                 Object.entries(row.latest_kpis).forEach(([metric, info]) => {
                   if (this.cells[row.portco_id][metric] && info) {
                     this.cells[row.portco_id][metric] = {
-                      value: info.value ?? '-',
-                      period: info.period ?? '-',
+                      value: info ?? '-',
+                      period: '-',
                     };
                   }
                 });
@@ -398,7 +443,9 @@
           },
 
           async _fetchAlerts(tenant) {
-            const res = await fetch(`/api/v1/alerts?tenant_slug=${tenant}&limit=20`);
+            const res = await fetch(`/api/v1/alerts?tenant_slug=${tenant}&limit=20`, {
+              headers: this._authHeaders(),
+            });
             if (!res.ok) return;
             const data = await res.json();
             if (!Array.isArray(data)) return;
@@ -413,7 +460,9 @@
           },
 
           async _fetchAgentRuns(tenant) {
-            const res = await fetch(`/api/v1/agent-runs?tenant_slug=${tenant}&limit=50`);
+            const res = await fetch(`/api/v1/agent-runs?tenant_slug=${tenant}&limit=50`, {
+              headers: this._authHeaders(),
+            });
             if (!res.ok) return;
             const data = await res.json();
             if (!Array.isArray(data) || !data.length) return;
@@ -438,6 +487,7 @@
 
           // --- SSE ---
           _connect() {
+            if (!this.token) return;
             try {
               const url = `/stream/${encodeURIComponent(this.tenant)}`;
               this._es = new EventSource(url);
@@ -483,7 +533,10 @@
               clearTimeout(this._reconnectTimer);
               this._reconnectTimer = null;
             }
-            this._connect();
+            if (this.token) {
+              this._connect();
+              this._loadInitialData();
+            }
           },
 
           _handleEvent(ev) {
@@ -621,11 +674,12 @@
 
           // --- test alert button ---
           async triggerTestAlert() {
+            if (!this.token) return;
             this.sendingTest = true;
             try {
               const res = await fetch(`/webhook/${encodeURIComponent(this.tenant)}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
                 body: JSON.stringify({
                   portco_id: 'portco-1',
                   metric: 'revenue',
@@ -639,6 +693,43 @@
             } finally {
               setTimeout(() => (this.sendingTest = false), 600);
             }
+          },
+
+          async login() {
+            this.loggingIn = true;
+            try {
+              const res = await fetch('/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  email: this.loginEmail,
+                  password: this.loginPassword,
+                }),
+              });
+              if (!res.ok) return;
+              const body = await res.json();
+              this.token = body.access_token ? '1' : '';
+              localStorage.setItem('portfolioPulseAuthenticated', this.token);
+              localStorage.setItem('portfolioPulseEmail', this.loginEmail);
+              this.reconnect();
+            } finally {
+              this.loggingIn = false;
+            }
+          },
+
+          logout() {
+            this.token = '';
+            fetch('/auth/logout', { method: 'POST' }).catch(() => {});
+            localStorage.removeItem('portfolioPulseAuthenticated');
+            if (this._es) {
+              this._es.close();
+              this._es = null;
+            }
+            this.connected = false;
+          },
+
+          _authHeaders() {
+            return {};
           },
 
           // --- chart ---
@@ -739,7 +830,8 @@
             return d.toTimeString().slice(0, 8);
           },
           relativeTime(ts) {
-            const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+            const then = typeof ts === 'number' ? ts : new Date(ts).getTime();
+            const sec = Math.max(1, Math.floor((Date.now() - then) / 1000));
             if (sec < 60) return `${sec}s ago`;
             const min = Math.floor(sec / 60);
             if (min < 60) return `${min} min ago`;

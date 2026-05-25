@@ -5,19 +5,18 @@ updates - on a fresh page load the dashboard needs the prior state (portcos,
 recent alerts, agent-runs for the cost burndown, computed portfolio-health
 scores). These endpoints fill that gap.
 
-Auth: intentionally unauthenticated for MVP. The dashboard is dev-only and the
-prod hardening story (cookie session, CSP, CSRF) lands with v0.2. Do NOT add
-sensitive data to these endpoints without first wiring real auth.
+Auth: JWT bearer. Responses are scoped to the tenant carried in the JWT.
 """
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.entities import AgentRun, Alert, KpiSnapshot, Portco, Tenant
+from app.services.rbac import current_user
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
@@ -32,9 +31,17 @@ async def _resolve_tenant_id(tenant_slug: str) -> str:
     return tenant.id
 
 
-@router.get("/portcos")
-async def list_portcos(tenant_slug: str = Query(...)) -> list[dict[str, Any]]:
+async def _authorize_tenant(request: Request, tenant_slug: str) -> str:
     tenant_id = await _resolve_tenant_id(tenant_slug)
+    user = await current_user(request)
+    if user.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=403, detail="tenant access denied")
+    return tenant_id
+
+
+@router.get("/portcos")
+async def list_portcos(request: Request, tenant_slug: str = Query(...)) -> list[dict[str, Any]]:
+    tenant_id = await _authorize_tenant(request, tenant_slug)
     async with SessionLocal() as db:
         rows = (
             (await db.execute(select(Portco).where(Portco.tenant_id == tenant_id))).scalars().all()
@@ -46,10 +53,11 @@ async def list_portcos(tenant_slug: str = Query(...)) -> list[dict[str, Any]]:
 
 @router.get("/alerts")
 async def list_alerts(
+    request: Request,
     tenant_slug: str = Query(...),
     limit: int = Query(default=20, ge=1, le=200),
 ) -> list[dict[str, Any]]:
-    tenant_id = await _resolve_tenant_id(tenant_slug)
+    tenant_id = await _authorize_tenant(request, tenant_slug)
     async with SessionLocal() as db:
         rows = (
             (
@@ -78,10 +86,11 @@ async def list_alerts(
 
 @router.get("/agent-runs")
 async def list_agent_runs(
+    request: Request,
     tenant_slug: str = Query(...),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> list[dict[str, Any]]:
-    tenant_id = await _resolve_tenant_id(tenant_slug)
+    tenant_id = await _authorize_tenant(request, tenant_slug)
     async with SessionLocal() as db:
         rows = (
             (
@@ -110,8 +119,8 @@ async def list_agent_runs(
 
 
 @router.get("/portfolio-health")
-async def portfolio_health(tenant_slug: str = Query(...)) -> list[dict[str, Any]]:
-    tenant_id = await _resolve_tenant_id(tenant_slug)
+async def portfolio_health(request: Request, tenant_slug: str = Query(...)) -> list[dict[str, Any]]:
+    tenant_id = await _authorize_tenant(request, tenant_slug)
     cutoff = datetime.now(UTC) - timedelta(days=30)
 
     async with SessionLocal() as db:
