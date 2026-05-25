@@ -1,846 +1,1065 @@
 <!doctype html>
-<!--
-  Portfolio-Pulse Dashboard (Epic 8)
-  ----------------------------------
-  Self-contained HTML. Tudo via CDN (Alpine 3 + Chart.js 4 + Tailwind).
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Portfolio Pulse</title>
 
-  IMPORTANTE: o EventSource aponta para /stream/{tenant} (mesma origem, cookie HttpOnly).
-  Para funcionar de verdade, sirva via FastAPI. Sugestao de mount:
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@300;400;500;600&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
 
-      from fastapi.staticfiles import StaticFiles
-      app.mount("/dashboard", StaticFiles(directory="app/static", html=True), name="dashboard")
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 
-  Depois acesse http://127.0.0.1:8000/dashboard/.
+  <style>
+    /* ─── TOKENS ──────────────────────────────────────────── */
+    :root {
+      /* Header */
+      --hdr-bg:    #0d1729;
+      --hdr-line:  rgba(255,255,255,0.07);
+      --hdr-ink:   #dde6f5;
+      --hdr-ink-2: #6a82a8;
+      --hdr-ink-3: #384d6e;
 
-  Abrir via file:// funciona visualmente mas SSE/POST falham por CORS/origin.
-  Nesse caso o dashboard mostra "disconnected" e auto-tenta reconectar.
--->
-<html lang="pt-BR" class="dark">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Portfolio-Pulse - Dashboard</title>
+      /* Body */
+      --bg:      #e8e4db;
+      --panel:   #f5f2eb;
+      --panel-2: #eeebe2;
+      --hover:   #e2dfd5;
 
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: "class",
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'system-ui', 'sans-serif'],
-            },
-            colors: {
-              brand: {
-                bg: '#0b1120',
-                panel: '#111827',
-                border: '#1f2937',
-              },
-            },
-          },
-        },
-      };
-    </script>
+      --line:    rgba(0,0,0,0.09);
+      --line-2:  rgba(0,0,0,0.16);
 
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+      --ink:     #0e1218;
+      --ink-2:   #4e5e78;
+      --ink-3:   #96a3b8;
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+      /* Channel colors */
+      --gold:    #9a6510;
+      --gold-on-dark: #c8912c;
+      --ch-health:   #a96d10;   /* gold  */
+      --ch-alerts:   #b82828;   /* red   */
+      --ch-cost:     #1f56b8;   /* blue  */
+      --ch-activity: #156e48;   /* green */
 
-    <style>
-      [x-cloak] { display: none !important; }
-      .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
-      .scroll-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-      .scroll-thin::-webkit-scrollbar-track { background: transparent; }
-      @keyframes pulse-dot {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
-      }
-      .pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
-    </style>
-  </head>
+      /* Semantic */
+      --green:      #156e48;
+      --green-dim:  rgba(21,110,72,0.09);
+      --green-line: rgba(21,110,72,0.28);
 
-  <body class="bg-slate-900 text-slate-100 font-sans antialiased min-h-screen">
-    <div
-      x-data="dashboard()"
-      x-init="init()"
-      x-cloak
-      class="flex flex-col min-h-screen"
-    >
-      <!-- ============ HEADER ============ -->
-      <header
-        class="flex items-center justify-between gap-4 px-6 py-4 border-b border-slate-800 bg-slate-950/60 backdrop-blur sticky top-0 z-20"
-      >
-        <div class="flex items-center gap-3">
-          <div
-            class="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-emerald-400 flex items-center justify-center font-bold text-slate-900"
-            aria-hidden="true"
-          >
-            P
-          </div>
-          <div>
-            <h1 class="text-lg font-semibold leading-none">Portfolio-Pulse</h1>
-            <p class="text-xs text-slate-400 mt-1">Realtime portfolio monitoring</p>
-          </div>
+      --amber:      #a86500;
+      --amber-dim:  rgba(168,101,0,0.09);
+      --amber-line: rgba(168,101,0,0.28);
+
+      --red:        #b82828;
+      --red-dim:    rgba(184,40,40,0.08);
+      --red-line:   rgba(184,40,40,0.26);
+
+      --blue:  #1f56b8;
+      --purple:#5b21b6;
+
+      --f:       'DM Sans', system-ui, sans-serif;
+      --mono:    'JetBrains Mono', monospace;
+      --brand-f: 'Syne', sans-serif;
+    }
+
+    /* ─── RESET ───────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--f);
+      font-size: 13px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      min-height: 100vh;
+    }
+
+    /* Subtle parchment grain */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: radial-gradient(circle, rgba(0,0,0,0.022) 1px, transparent 1px);
+      background-size: 22px 22px;
+      pointer-events: none; z-index: 0;
+    }
+
+    .shell {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column; min-height: 100vh;
+    }
+
+    /* ─── HEADER ──────────────────────────────────────────── */
+    .hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 20px; height: 54px; padding: 0 20px;
+      background: var(--hdr-bg);
+      border-bottom: 2px solid var(--gold-on-dark);
+      position: sticky; top: 0; z-index: 20;
+    }
+
+    .hdr-l { display: flex; align-items: center; gap: 18px; }
+    .hdr-r { display: flex; align-items: center; gap: 6px; }
+
+    /* Logo */
+    .logo { display: flex; align-items: center; gap: 9px; text-decoration: none; flex-shrink: 0; }
+    .logo-icon { width: 24px; height: 16px; color: var(--gold-on-dark); flex-shrink: 0; }
+    .logo-name {
+      font-family: var(--brand-f); font-size: 14px; font-weight: 700;
+      letter-spacing: -0.01em; color: var(--hdr-ink); white-space: nowrap; user-select: none;
+    }
+    .logo-name em { font-style: normal; color: var(--gold-on-dark); }
+
+    /* Chips */
+    .chips { display: flex; gap: 2px; }
+    .chip {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 8px;
+      border: 1px solid var(--hdr-line);
+      background: rgba(255,255,255,0.04);
+    }
+    .chip-val { font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--hdr-ink); }
+    .chip-lbl { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--hdr-ink-3); }
+    .chip-dot { width: 5px; height: 5px; flex-shrink: 0; }
+
+    /* Select */
+    .sel {
+      appearance: none; -webkit-appearance: none;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--hdr-line);
+      color: var(--hdr-ink); font-family: var(--mono); font-size: 11.5px;
+      padding: 4px 24px 4px 8px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236a82a8' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 6px center;
+      cursor: pointer;
+    }
+    .sel:focus { outline: none; border-color: var(--gold-on-dark); }
+    .sel option { background: #1a2a48; }
+
+    /* SSE */
+    .sse {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border: 1px solid;
+      font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .sse.on  { border-color: rgba(21,110,72,0.45); background: rgba(21,110,72,0.14); color: #2ed48e; }
+    .sse.off { border-color: rgba(184,40,40,0.45); background: rgba(184,40,40,0.14); color: #e56060; }
+    .sse-dot { width: 5px; height: 5px; }
+    .sse.on  .sse-dot { background: #2ed48e; }
+    .sse.off .sse-dot { background: #e56060; }
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.25;} }
+    .sse.on .sse-dot { animation: blink 2.2s ease-in-out infinite; }
+
+    /* Button */
+    .btn {
+      padding: 4px 11px; border: 1px solid rgba(200,145,44,0.35);
+      background: rgba(200,145,44,0.12); color: var(--gold-on-dark);
+      font-family: var(--mono); font-size: 11px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      cursor: pointer; transition: background 0.12s;
+    }
+    .btn:hover:not(:disabled) { background: rgba(200,145,44,0.22); }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* Login (header) */
+    .lg-form { display: flex; align-items: center; gap: 4px; }
+    .lg-input {
+      appearance: none; -webkit-appearance: none;
+      background: rgba(255,255,255,0.05); border: 1px solid var(--hdr-line);
+      color: var(--hdr-ink); font-family: var(--mono); font-size: 11.5px;
+      padding: 4px 8px; width: 140px;
+    }
+    .lg-input.pw { width: 72px; }
+    .lg-input:focus { outline: none; border-color: var(--gold-on-dark); }
+    .lg-input::placeholder { color: var(--hdr-ink-3); text-transform: lowercase; }
+    .lg-user {
+      font-family: var(--mono); font-size: 10.5px; color: var(--hdr-ink-2);
+      text-transform: lowercase; margin-right: 4px; max-width: 160px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .lg-err {
+      font-family: var(--mono); font-size: 10px; color: #e56060;
+      text-transform: uppercase; letter-spacing: 0.05em; margin-left: 4px;
+    }
+    .hdr-sep { width: 1px; height: 18px; background: var(--hdr-line); margin: 0 4px; }
+
+    /* ─── MAIN GRID ───────────────────────────────────────── */
+    .grid {
+      flex: 1; display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 10px; padding: 14px 20px;
+      align-content: start;
+    }
+
+    /* ─── PANEL ───────────────────────────────────────────── */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line-2);
+      border-top-width: 3px;
+      display: flex; flex-direction: column;
+    }
+    /* Channel color top borders */
+    .panel[data-ch="health"]   { border-top-color: var(--ch-health); }
+    .panel[data-ch="alerts"]   { border-top-color: var(--ch-alerts); }
+    .panel[data-ch="cost"]     { border-top-color: var(--ch-cost);   }
+    .panel[data-ch="activity"] { border-top-color: var(--ch-activity); }
+
+    .ph {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px 0 14px;
+      margin-bottom: 0;
+    }
+    .pt {
+      font-family: var(--mono); font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink);
+    }
+    /* Channel color on title */
+    .panel[data-ch="health"]   .pt { color: var(--ch-health); }
+    .panel[data-ch="alerts"]   .pt { color: var(--ch-alerts); }
+    .panel[data-ch="cost"]     .pt { color: var(--ch-cost);   }
+    .panel[data-ch="activity"] .pt { color: var(--ch-activity); }
+
+    .pm { font-family: var(--mono); font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* ─── PANEL DIVIDER ───────────────────────────────────── */
+    .pdiv { height: 1px; background: var(--line); margin: 8px 0 0 0; }
+
+    /* ─── HEALTH TABLE ────────────────────────────────────── */
+    .ht-wrap { padding: 0 14px 12px 14px; }
+    .ht { width: 100%; border-collapse: collapse; }
+    .ht thead th {
+      font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-3);
+      padding: 8px 6px 6px 6px; text-align: left; border-bottom: 1px solid var(--line-2);
+      white-space: nowrap;
+    }
+    .ht thead th:first-child { padding-left: 0; }
+    .ht thead th:last-child  { text-align: right; padding-right: 0; }
+
+    .ht tbody tr { transition: background 0.08s; cursor: default; }
+    .ht tbody tr:not(:last-child) td,
+    .ht tbody tr:not(:last-child) th { border-bottom: 1px solid var(--line); }
+    .ht tbody tr:hover td,
+    .ht tbody tr:hover th { background: var(--hover); }
+
+    .ht-co  { padding: 8px 6px 8px 0; vertical-align: middle; }
+    .ht-cname { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+    .ht-csec  {
+      display: inline-block; margin-left: 6px;
+      font-family: var(--mono); font-size: 9px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--ink-3); vertical-align: middle;
+    }
+
+    .ht-mc { padding: 8px 6px; vertical-align: middle; }
+    .ht-val { font-family: var(--mono); font-size: 12.5px; font-weight: 400; color: var(--ink-3); }
+    .ht-val.g { color: var(--green); }
+    .ht-val.a { color: var(--amber); }
+    .ht-val.r { color: var(--red);   }
+    .ht-per { font-family: var(--mono); font-size: 9px; color: var(--ink-3); margin-top: 1px; }
+
+    .ht-sc { padding: 8px 0 8px 6px; vertical-align: middle; text-align: right; }
+    .score-badge {
+      display: inline-flex; align-items: center;
+      font-family: var(--mono); font-size: 11px; font-weight: 600;
+      padding: 2px 7px; border: 1px solid;
+    }
+    .score-badge.g { background: var(--green-dim); color: var(--green); border-color: var(--green-line); }
+    .score-badge.a { background: var(--amber-dim); color: var(--amber); border-color: var(--amber-line); }
+    .score-badge.r { background: var(--red-dim);   color: var(--red);   border-color: var(--red-line);   }
+
+    .ht-legend { padding: 6px 14px 12px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* ─── ALERT FEED — Bloomberg news-wire ───────────────── */
+    .alist {
+      display: flex; flex-direction: column;
+      overflow-y: auto; flex: 1; max-height: 370px;
+    }
+    .aitem {
+      display: flex; align-items: baseline; gap: 0;
+      padding: 7px 14px; border-bottom: 1px solid var(--line);
+      transition: background 0.08s; cursor: default;
+      position: relative; padding-left: 18px;
+    }
+    .aitem:hover { background: var(--hover); }
+    /* severity bar */
+    .aitem::before {
+      content: '';
+      position: absolute; left: 8px; top: 9px; bottom: 9px;
+      width: 3px;
+    }
+    .aitem.urgent::before    { background: var(--red); }
+    .aitem.attention::before { background: var(--amber); }
+    .aitem.info::before      { background: var(--ink-3); }
+
+    .aitem-left { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+    .aname  { font-size: 12.5px; font-weight: 600; color: var(--ink); white-space: nowrap; }
+    .abadge {
+      font-family: var(--mono); font-size: 9px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      padding: 1px 5px; border: 1px solid;
+    }
+    .abadge.urgent    { color: var(--red);   background: var(--red-dim);   border-color: var(--red-line); }
+    .abadge.attention { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-line); }
+    .abadge.info      { color: var(--ink-2); background: transparent;      border-color: var(--line-2); }
+    .abadge.human     { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-line); }
+    .asum { font-size: 12px; color: var(--ink-2); line-height: 1.4; min-width: 0; }
+    .atime { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); white-space: nowrap; margin-left: 10px; flex-shrink: 0; }
+
+    .empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 32px; }
+    .empty p { font-family: var(--mono); font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+
+    /* ─── COST CHART ──────────────────────────────────────── */
+    .cost-meta {
+      display: flex; align-items: baseline; gap: 10px;
+      padding: 10px 14px 0 14px;
+    }
+    .cost-num {
+      font-family: var(--mono); font-size: 22px; font-weight: 300;
+      color: var(--ink); letter-spacing: -0.02em; line-height: 1;
+    }
+    .cost-unit { font-family: var(--mono); font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+    .cw { position: relative; flex: 1; min-height: 170px; margin: 12px 14px 14px 14px; }
+
+    /* ─── AGENT ACTIVITY — Bloomberg data table ───────────── */
+    .at-wrap { padding: 0 14px 14px 14px; overflow-y: auto; flex: 1; max-height: 240px; }
+    .at { width: 100%; border-collapse: collapse; }
+    .at thead th {
+      font-family: var(--mono); font-size: 9px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-3);
+      padding: 8px 6px 6px 0; text-align: left; border-bottom: 1px solid var(--line-2);
+      white-space: nowrap;
+    }
+    .at thead th:last-child { text-align: right; padding-right: 0; }
+
+    .at tbody tr { transition: background 0.08s; }
+    .at tbody tr:not(:last-child) td { border-bottom: 1px solid var(--line); }
+    .at tbody tr:hover td { background: var(--hover); }
+
+    .at-time   { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); padding: 6px 10px 6px 0; white-space: nowrap; vertical-align: middle; }
+    .at-agent  { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--ink); padding: 6px 10px 6px 0; vertical-align: middle; }
+    .at-status {
+      font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+      letter-spacing: 0.05em; padding: 6px 10px 6px 0; vertical-align: middle;
+    }
+    .at-status.started   { color: var(--blue); }
+    .at-status.completed { color: var(--green); }
+    .at-dur { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); text-align: right; padding: 6px 0; vertical-align: middle; white-space: nowrap; }
+
+    .at-dot {
+      display: inline-block; width: 6px; height: 6px;
+      margin-right: 6px; vertical-align: middle;
+    }
+    .at-dot.anomaly     { background: var(--blue); }
+    .at-dot.context     { background: var(--green); }
+    .at-dot.severity    { background: var(--purple); }
+    .at-dot.coordinator { background: var(--ch-health); }
+    .at-dot.pipeline    { background: var(--ink-3); }
+    .at-dot.def         { background: var(--ink-3); }
+
+    .empty-tl { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; text-align: center; padding: 28px 0; }
+
+    /* ─── GRID SPANS ──────────────────────────────────────── */
+    .s5 { grid-column: span 5; }
+
+    /* ─── SCROLLBAR ───────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 3px; height: 3px; }
+    ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    [x-cloak] { display: none !important; }
+
+    @media (max-width: 1100px) {
+      .lg-input { width: 110px; }
+      .lg-input.pw { width: 64px; }
+    }
+    @media (max-width: 860px) {
+      .s5 { grid-column: span 10; }
+      .grid { grid-template-columns: 1fr; }
+      .chips { display: none; }
+      .lg-input { width: 96px; }
+      .lg-user { max-width: 100px; }
+    }
+  </style>
+</head>
+
+<body>
+<div x-data="dashboard()" x-init="init()" x-cloak class="shell">
+
+  <!-- ════════ HEADER ════════ -->
+  <header class="hdr">
+    <div class="hdr-l">
+
+      <a href="#" class="logo" aria-label="Portfolio Pulse">
+        <svg class="logo-icon" viewBox="0 0 26 18" fill="none" aria-hidden="true">
+          <polyline
+            points="0,9 3,9 5.5,3.5 8,15.5 10.5,1 13,17 15.5,6.5 18,9 26,9"
+            stroke="currentColor" fill="none"
+            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-name">portfolio<em>pulse</em></span>
+      </a>
+
+      <div class="chips" role="group" aria-label="Live metrics">
+        <div class="chip">
+          <span class="chip-val" x-text="portcos.length"></span>
+          <span class="chip-lbl">portcos</span>
         </div>
-
-        <div class="flex items-center gap-4">
-          <template x-if="!token">
-            <form class="flex items-center gap-2" @submit.prevent="login()">
-              <input
-                type="email"
-                x-model="loginEmail"
-                class="w-40 bg-slate-800 border border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                aria-label="Email"
-              />
-              <input
-                type="password"
-                x-model="loginPassword"
-                class="w-28 bg-slate-800 border border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                aria-label="Password"
-              />
-              <button
-                type="submit"
-                :disabled="loggingIn"
-                class="text-sm font-medium px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
-              >
-                <span x-show="!loggingIn">Login</span>
-                <span x-show="loggingIn">...</span>
-              </button>
-            </form>
-          </template>
-
-          <template x-if="token">
-            <button
-              type="button"
-              @click="logout()"
-              class="text-sm font-medium px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-700 transition"
-            >
-              Logout
-            </button>
-          </template>
-
-          <label class="text-xs text-slate-400 hidden sm:block" for="tenant">Tenant</label>
-          <select
-            id="tenant"
-            x-model="tenant"
-            @change="reconnect()"
-            class="bg-slate-800 border border-slate-700 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            aria-label="Selecionar tenant"
-          >
-            <option value="acme">acme</option>
-          </select>
-
-          <div
-            class="flex items-center gap-2 text-sm px-3 py-1.5 rounded-md border"
-            :class="connected ? 'border-emerald-700 bg-emerald-900/30 text-emerald-300' : 'border-red-700 bg-red-900/30 text-red-300'"
-            role="status"
-            :aria-label="connected ? 'SSE conectado' : 'SSE desconectado'"
-          >
-            <span
-              class="w-2 h-2 rounded-full"
-              :class="connected ? 'bg-emerald-400 pulse-dot' : 'bg-red-500'"
-              aria-hidden="true"
-            ></span>
-            <span x-text="connected ? 'connected' : 'disconnected'"></span>
-          </div>
-
-          <button
-            type="button"
-            @click="triggerTestAlert()"
-            :disabled="sendingTest || !token"
-            class="text-sm font-medium px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition"
-            aria-label="Disparar alerta de teste"
-          >
-            <span x-show="!sendingTest">Trigger test alert</span>
-            <span x-show="sendingTest">Sending...</span>
-          </button>
+        <div class="chip">
+          <span class="chip-dot"
+            :style="alerts.filter(a=>a.severity==='urgent').length > 0
+              ? 'background:#e56060'
+              : 'background:var(--hdr-ink-3)'">
+          </span>
+          <span class="chip-val" x-text="alerts.filter(a=>a.severity==='urgent').length"></span>
+          <span class="chip-lbl">urgent</span>
         </div>
-      </header>
+        <div class="chip">
+          <span class="chip-val" x-text="activities.length"></span>
+          <span class="chip-lbl">events</span>
+        </div>
+        <div class="chip">
+          <span class="chip-val"
+            x-text="portcos.length
+              ? Math.round(portcos.reduce(function(s,p){return s+(healthScores[p.id]||0);},0)/portcos.length)
+              : '—'">
+          </span>
+          <span class="chip-lbl">avg hlth</span>
+        </div>
+      </div>
 
-      <!-- ============ GRID ============ -->
-      <main class="flex-1 grid gap-4 p-4 lg:p-6 grid-cols-1 lg:grid-cols-10 auto-rows-min">
-        <!-- Widget 1: Portfolio Health Heatmap -->
-        <section
-          class="lg:col-span-4 bg-slate-800/40 border border-slate-800 rounded-xl p-5"
-          aria-labelledby="w1-title"
-        >
-          <header class="flex items-center justify-between mb-4">
-            <h2 id="w1-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Portfolio Health
-            </h2>
-            <span class="text-xs text-slate-500">heatmap</span>
-          </header>
-
-          <div class="overflow-x-auto scroll-thin">
-            <table class="w-full text-sm border-separate border-spacing-1" role="grid">
-              <thead>
-                <tr class="text-xs text-slate-400 uppercase">
-                  <th class="text-left font-medium px-2 py-1.5" scope="col">Portco</th>
-                  <template x-for="m in metrics" :key="m">
-                    <th class="text-left font-medium px-2 py-1.5" scope="col" x-text="m"></th>
-                  </template>
-                </tr>
-              </thead>
-              <tbody>
-                <template x-for="p in portcos" :key="p.id">
-                  <tr>
-                    <th
-                      scope="row"
-                      class="text-left font-medium px-2 py-2 rounded-md bg-slate-900/40 align-top"
-                    >
-                      <div x-text="p.name" class="text-slate-100"></div>
-                      <div x-text="p.sector" class="text-xs text-slate-500 mt-0.5"></div>
-                    </th>
-                    <template x-for="m in metrics" :key="m">
-                      <td
-                        class="rounded-md p-2 align-top transition-colors"
-                        :class="cellColor(healthScores[p.id])"
-                      >
-                        <div class="text-base font-semibold tabular-nums" x-text="cellValue(p.id, m)"></div>
-                        <div class="text-[10px] uppercase tracking-wide opacity-75" x-text="cellPeriod(p.id, m)"></div>
-                      </td>
-                    </template>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
-
-          <p class="mt-3 text-xs text-slate-500">
-            Score por portco: <span class="text-emerald-400">verde</span> &ge; 80,
-            <span class="text-amber-400">amarelo</span> 50-80,
-            <span class="text-red-400">vermelho</span> &lt; 50.
-          </p>
-        </section>
-
-        <!-- Widget 2: Alert Feed -->
-        <section
-          class="lg:col-span-6 bg-slate-800/40 border border-slate-800 rounded-xl p-5 flex flex-col"
-          aria-labelledby="w2-title"
-        >
-          <header class="flex items-center justify-between mb-4">
-            <h2 id="w2-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Alert Feed
-            </h2>
-            <span class="text-xs text-slate-500" x-text="`${alerts.length} alerts`"></span>
-          </header>
-
-          <div class="space-y-2 overflow-y-auto scroll-thin pr-1 max-h-[420px]" role="log" aria-live="polite">
-            <template x-if="alerts.length === 0">
-              <div class="text-sm text-slate-500 italic py-8 text-center">
-                Nenhum alerta ainda. Use "Trigger test alert" ou aguarde eventos do pipeline.
-              </div>
-            </template>
-
-            <template x-for="a in alerts.slice(0, 20)" :key="a.id">
-              <article
-                class="flex items-start gap-3 p-3 rounded-lg border bg-slate-900/40"
-                :class="severityBorder(a.severity)"
-              >
-                <div class="text-xl leading-none mt-0.5" aria-hidden="true" x-text="severityEmoji(a.severity)"></div>
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium text-sm" x-text="a.portco_name"></span>
-                    <span
-                      class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
-                      :class="severityBadge(a.severity)"
-                      x-text="a.severity"
-                    ></span>
-                    <template x-if="a.requires_human">
-                      <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-900/60 text-amber-200 border border-amber-700">
-                        requires_human
-                      </span>
-                    </template>
-                  </div>
-                  <p class="text-sm text-slate-300 mt-1 break-words" x-text="a.summary"></p>
-                </div>
-                <time class="text-xs text-slate-500 whitespace-nowrap" x-text="relativeTime(a.ts)"></time>
-              </article>
-            </template>
-          </div>
-        </section>
-
-        <!-- Widget 3: Cost Burndown -->
-        <section
-          class="lg:col-span-5 bg-slate-800/40 border border-slate-800 rounded-xl p-5 hidden md:block"
-          aria-labelledby="w3-title"
-        >
-          <header class="flex items-center justify-between mb-4">
-            <h2 id="w3-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Cost Burndown
-            </h2>
-            <span class="text-xs text-slate-500">
-              cumulative USD - last <span x-text="costHistory.length"></span> runs
-            </span>
-          </header>
-          <div class="relative h-64">
-            <canvas id="costChart" aria-label="Grafico de custo acumulado"></canvas>
-          </div>
-        </section>
-
-        <!-- Widget 4: Agent Activity Timeline -->
-        <section
-          class="lg:col-span-5 bg-slate-800/40 border border-slate-800 rounded-xl p-5 hidden md:flex flex-col"
-          aria-labelledby="w4-title"
-        >
-          <header class="flex items-center justify-between mb-4">
-            <h2 id="w4-title" class="text-sm font-semibold uppercase tracking-wider text-slate-300">
-              Agent Activity
-            </h2>
-            <span class="text-xs text-slate-500" x-text="`${activities.length} events`"></span>
-          </header>
-
-          <div class="space-y-1.5 overflow-y-auto scroll-thin pr-1 max-h-[260px]" role="log" aria-live="polite">
-            <template x-if="activities.length === 0">
-              <div class="text-sm text-slate-500 italic py-6 text-center">
-                Aguardando atividade dos agentes...
-              </div>
-            </template>
-            <template x-for="act in activities.slice(0, 15)" :key="act.id">
-              <div class="flex items-center gap-3 text-sm py-1.5 px-2 rounded hover:bg-slate-900/40">
-                <span
-                  class="w-2 h-2 rounded-full flex-shrink-0"
-                  :class="agentColor(act.agent)"
-                  aria-hidden="true"
-                ></span>
-                <span class="font-mono text-xs text-slate-400 w-16 flex-shrink-0" x-text="formatTime(act.ts)"></span>
-                <span class="font-medium" x-text="act.agent"></span>
-                <span class="text-slate-400" x-text="act.status"></span>
-                <span class="text-slate-500 text-xs ml-auto tabular-nums" x-show="act.duration_ms !== null" x-text="`${(act.duration_ms / 1000).toFixed(2)}s`"></span>
-              </div>
-            </template>
-          </div>
-        </section>
-      </main>
-
-      <footer class="text-center text-xs text-slate-600 py-4">
-        Portfolio-Pulse Demo - SSE stream: <code class="text-slate-500" x-text="`/stream/${tenant}`"></code>
-      </footer>
     </div>
 
-    <!-- ============ APP LOGIC ============ -->
-    <script>
-      function dashboard() {
-        return {
-          // --- state ---
-          tenant: 'acme',
-          token: localStorage.getItem('portfolioPulseAuthenticated') || '',
-          loginEmail: localStorage.getItem('portfolioPulseEmail') || 'gp@acme.test',
-          loginPassword: 'dev',
-          loggingIn: false,
-          connected: false,
-          alerts: [],
-          activities: [],
-          sendingTest: false,
-          portcos: [
-            { id: 'portco-1', name: 'AcmeCo', sector: 'SaaS' },
-            { id: 'portco-2', name: 'BetaHealth', sector: 'Healthtech' },
-            { id: 'portco-3', name: 'GammaFin', sector: 'Fintech' },
-          ],
-          metrics: ['revenue', 'burn', 'churn_pct'],
-          healthScores: {},
-          cells: {}, // {portco_id: {metric: {value, period}}}
-          costHistory: [],
-          activeAgents: {}, // {thread_id: {agent, started_at}}
+    <div class="hdr-r">
 
-          // --- internals ---
-          _es: null,
-          _reconnectAttempt: 0,
-          _reconnectTimer: null,
-          _chart: null,
-          _nextId: 1,
+      <template x-if="!token">
+        <form class="lg-form" @submit.prevent="login()" autocomplete="on">
+          <input type="email" class="lg-input" placeholder="email"
+            x-model="loginEmail" :disabled="loggingIn" autocomplete="username"
+            aria-label="email" required/>
+          <input type="password" class="lg-input pw" placeholder="pwd"
+            x-model="loginPassword" :disabled="loggingIn" autocomplete="current-password"
+            aria-label="password" required/>
+          <button type="submit" class="btn" :disabled="loggingIn || !loginEmail || !loginPassword">
+            <span x-show="!loggingIn">login</span>
+            <span x-show="loggingIn">…</span>
+          </button>
+          <span class="lg-err" x-show="authError" x-text="authError"></span>
+        </form>
+      </template>
 
-          // --- lifecycle ---
-          init() {
-            // seed health scores 30-100
-            this.portcos.forEach((p) => {
-              this.healthScores[p.id] = Math.floor(Math.random() * 71) + 30;
-              this.cells[p.id] = {};
-              this.metrics.forEach((m) => {
-                this.cells[p.id][m] = { value: '-', period: '-' };
-              });
-            });
+      <template x-if="token">
+        <div class="lg-form">
+          <span class="lg-user" x-text="loginEmail" :title="loginEmail"></span>
+          <button type="button" class="btn" @click="logout()">logout</button>
+        </div>
+      </template>
 
-            // seed cost history (10 points growing 0 -> 0.6)
-            this.costHistory = Array.from({ length: 10 }, (_, i) => ({
-              t: `t-${10 - i}`,
-              cost: +((i / 9) * 0.6).toFixed(3),
-            }));
+      <div class="hdr-sep"></div>
 
-            this.$nextTick(() => this._buildChart());
-            if (this.token) {
-              this._connect();
-              this._loadInitialData();
-            }
+      <span class="chip-lbl" style="color:var(--hdr-ink-2);margin-right:2px">TENANT</span>
+      <select class="sel" id="t-sel" x-model="tenant" @change="reconnect()">
+        <option value="acme">acme</option>
+      </select>
 
-            // refresh relative timestamps every 15s
-            setInterval(() => {
-              this.alerts = [...this.alerts];
-            }, 15000);
-          },
+      <div class="sse" :class="connected ? 'on' : 'off'" role="status">
+        <span class="sse-dot" aria-hidden="true"></span>
+        <span x-text="connected ? 'live' : 'offline'"></span>
+      </div>
 
-          // --- initial REST fetch (dashboard hydrates from /api/v1/* then lives on SSE) ---
-          async _loadInitialData() {
-            if (!this.token) return;
-            const tenant = encodeURIComponent(this.tenant);
-            // Run in parallel; each is best-effort, fall back to seeded mocks on failure.
-            await Promise.allSettled([
-              this._fetchPortcos(tenant),
-              this._fetchHealth(tenant),
-              this._fetchAlerts(tenant),
-              this._fetchAgentRuns(tenant),
-            ]);
-          },
+      <button class="btn" type="button" @click="triggerTestAlert()"
+        :disabled="sendingTest || !token"
+        :title="!token ? 'login required' : ''">
+        <span x-show="!sendingTest">↯ sim kpi</span>
+        <span x-show="sendingTest">sending…</span>
+      </button>
+    </div>
+  </header>
 
-          async _fetchPortcos(tenant) {
-            const res = await fetch(`/api/v1/portcos?tenant_slug=${tenant}`, {
-              headers: this._authHeaders(),
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            if (Array.isArray(data) && data.length) {
-              this.portcos = data.map((p) => ({ id: p.id, name: p.name, sector: p.sector }));
-              // ensure cells map covers any new portcos
-              this.portcos.forEach((p) => {
-                if (!this.cells[p.id]) {
-                  this.cells[p.id] = {};
-                  this.metrics.forEach((m) => {
-                    this.cells[p.id][m] = { value: '-', period: '-' };
-                  });
-                }
-              });
-            }
-          },
+  <!-- ════════ MAIN ════════ -->
+  <main class="grid">
 
-          async _fetchHealth(tenant) {
-            const res = await fetch(`/api/v1/portfolio-health?tenant_slug=${tenant}`, {
-              headers: this._authHeaders(),
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            if (!Array.isArray(data)) return;
-            data.forEach((row) => {
-              if (typeof row.health_score === 'number') {
-                this.healthScores[row.portco_id] = row.health_score;
+    <!-- ── Portfolio Health ── -->
+    <section class="panel s5" data-ch="health" aria-labelledby="ph-title">
+      <div class="ph">
+        <h2 class="pt" id="ph-title">Portfolio Health</h2>
+        <span class="pm" x-text="`${portcos.length} co`"></span>
+      </div>
+      <div class="pdiv"></div>
+      <div class="ht-wrap">
+        <table class="ht" role="grid">
+          <thead>
+            <tr>
+              <th scope="col">Company</th>
+              <template x-for="m in metrics" :key="m">
+                <th scope="col" x-text="metricLabel(m)"></th>
+              </template>
+              <th scope="col">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="p in portcos" :key="p.id">
+              <tr>
+                <th scope="row" class="ht-co">
+                  <span class="ht-cname" x-text="p.name"></span>
+                  <span class="ht-csec" x-text="p.sector"></span>
+                </th>
+                <template x-for="m in metrics" :key="m">
+                  <td class="ht-mc">
+                    <div class="ht-val" :class="cellValClass(p.id)" x-text="cellValue(p.id, m)"></div>
+                    <div class="ht-per" x-text="cellPeriod(p.id, m)"></div>
+                  </td>
+                </template>
+                <td class="ht-sc">
+                  <span class="score-badge" :class="scoreClass(healthScores[p.id])"
+                    x-text="healthScores[p.id] != null ? healthScores[p.id] : '—'">
+                  </span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <p class="ht-legend">&ge;80 healthy &middot; 50–79 monitor &middot; &lt;50 alert</p>
+    </section>
+
+    <!-- ── Alert Feed ── -->
+    <section class="panel s5" data-ch="alerts" aria-labelledby="af-title" style="display:flex;flex-direction:column;">
+      <div class="ph">
+        <h2 class="pt" id="af-title">Alert Feed</h2>
+        <span class="pm" x-text="`${alerts.length} total`"></span>
+      </div>
+      <div class="pdiv"></div>
+
+      <div class="alist" role="log" aria-live="polite">
+        <template x-if="alerts.length === 0">
+          <div class="empty">
+            <p>No alerts — pipeline quiet</p>
+          </div>
+        </template>
+        <template x-for="a in alerts.slice(0, 20)" :key="a.id">
+          <div class="aitem" :class="a.severity">
+            <div class="aitem-left">
+              <span class="aname" x-text="a.portco_name"></span>
+              <span class="abadge" :class="a.severity" x-text="a.severity"></span>
+              <template x-if="a.requires_human">
+                <span class="abadge human">human</span>
+              </template>
+              <span class="asum" x-text="a.summary"></span>
+            </div>
+            <span class="atime" x-text="relativeTime(a.ts)"></span>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- ── Cost Burndown ── -->
+    <section class="panel s5" data-ch="cost" aria-labelledby="cb-title">
+      <div class="ph">
+        <h2 class="pt" id="cb-title">Cost Burndown</h2>
+        <span class="pm" x-text="`${costHistory.length} runs`"></span>
+      </div>
+      <div class="pdiv"></div>
+      <div class="cost-meta">
+        <span class="cost-num" x-text="`$${(costHistory[costHistory.length-1]?.cost || 0).toFixed(3)}`"></span>
+        <span class="cost-unit">USD cumulative</span>
+      </div>
+      <div class="cw">
+        <canvas id="costChart" aria-label="Cost chart"></canvas>
+      </div>
+    </section>
+
+    <!-- ── Agent Activity ── -->
+    <section class="panel s5" data-ch="activity" aria-labelledby="aa-title">
+      <div class="ph">
+        <h2 class="pt" id="aa-title">Agent Activity</h2>
+        <span class="pm" x-text="`${activities.length} events`"></span>
+      </div>
+      <div class="pdiv"></div>
+
+      <div class="at-wrap" role="log" aria-live="polite">
+        <template x-if="activities.length === 0">
+          <div class="empty-tl">Awaiting agent events</div>
+        </template>
+        <template x-if="activities.length > 0">
+          <table class="at">
+            <thead>
+              <tr>
+                <th scope="col">Time</th>
+                <th scope="col">Agent</th>
+                <th scope="col">Status</th>
+                <th scope="col">Dur</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="act in activities.slice(0, 15)" :key="act.id">
+                <tr>
+                  <td class="at-time" x-text="formatTime(act.ts)"></td>
+                  <td class="at-agent">
+                    <span class="at-dot" :class="agentDotCls(act.agent)"></span>
+                    <span x-text="act.agent"></span>
+                  </td>
+                  <td class="at-status" :class="act.status" x-text="act.status"></td>
+                  <td class="at-dur"
+                    x-text="act.duration_ms != null ? (act.duration_ms/1000).toFixed(1)+'s' : '—'">
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </template>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ════════ APP LOGIC ════════ -->
+<script>
+  var _chartInstance = null;
+
+  function dashboard() {
+    return {
+      tenant: 'acme',
+      token: localStorage.getItem('pp_auth') || '',
+      loginEmail: localStorage.getItem('pp_email') || 'gp@acme.test',
+      loginPassword: '',
+      loggingIn: false,
+      authError: '',
+      connected: false,
+      alerts: [],
+      activities: [],
+      sendingTest: false,
+      // _chartInstance lives outside the Alpine proxy on purpose; storing the
+      // Chart.js instance on a reactive object recurses into its cyclic config.
+      portcos: [
+        { id: 'portco-1', name: 'AcmeCo',    sector: 'SaaS'       },
+        { id: 'portco-2', name: 'BetaHealth', sector: 'Healthtech' },
+        { id: 'portco-3', name: 'GammaFin',  sector: 'Fintech'    },
+      ],
+      metrics: ['revenue', 'burn', 'churn_pct'],
+      healthScores: {},
+      cells: {},
+      costHistory: [],
+      activeAgents: {},
+      _es: null, _reconnectAttempt: 0, _reconnectTimer: null,
+      _nextId: 1,
+
+      init: function() {
+        var self = this;
+        if (self._inited) return;
+        self._inited = true;
+        self.portcos.forEach(function(p) {
+          self.healthScores[p.id] = Math.floor(Math.random() * 71) + 30;
+          self.cells[p.id] = {};
+          self.metrics.forEach(function(m) { self.cells[p.id][m] = { value: '-', period: '-' }; });
+        });
+        self.costHistory = Array.from({ length: 10 }, function(_, i) {
+          return { t: 'r'+(i+1), cost: +((i/9)*0.6).toFixed(3) };
+        });
+        self.$nextTick(function() { self._buildChart(); });
+        if (self.token) {
+          self._connect();
+          self._loadInitialData();
+        }
+        setInterval(function() { self.alerts = self.alerts.slice(); }, 15000);
+      },
+
+      _loadInitialData: async function() {
+        var t = encodeURIComponent(this.tenant);
+        await Promise.allSettled([
+          this._fetchPortcos(t), this._fetchHealth(t),
+          this._fetchAlerts(t),  this._fetchAgentRuns(t),
+        ]);
+      },
+
+      _fetchPortcos: async function(t) {
+        try {
+          var r = await fetch('/api/v1/portcos?tenant_slug='+t);
+          if (r.status === 401) { this._handleUnauthorized(); return; }
+          if (!r.ok) return;
+          var d = await r.json();
+          var self = this;
+          if (Array.isArray(d) && d.length) {
+            self.portcos = d.map(function(p) { return { id:p.id, name:p.name, sector:p.sector }; });
+            self.portcos.forEach(function(p) {
+              if (!self.cells[p.id]) {
+                self.cells[p.id] = {};
+                self.metrics.forEach(function(m) { self.cells[p.id][m] = { value:'-', period:'-' }; });
               }
-              if (row.latest_kpis && this.cells[row.portco_id]) {
-                Object.entries(row.latest_kpis).forEach(([metric, info]) => {
-                  if (this.cells[row.portco_id][metric] && info) {
-                    this.cells[row.portco_id][metric] = {
-                      value: info ?? '-',
-                      period: '-',
-                    };
-                  }
-                });
-              }
             });
-          },
+          }
+        } catch(e) {}
+      },
 
-          async _fetchAlerts(tenant) {
-            const res = await fetch(`/api/v1/alerts?tenant_slug=${tenant}&limit=20`, {
-              headers: this._authHeaders(),
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            if (!Array.isArray(data)) return;
-            this.alerts = data.map((a) => ({
-              id: this._nextId++,
-              portco_name: this._portcoName(a.portco_id),
-              severity: a.severity,
-              summary: a.summary,
+      _fetchHealth: async function(t) {
+        try {
+          var r = await fetch('/api/v1/portfolio-health?tenant_slug='+t);
+          if (r.status === 401) { this._handleUnauthorized(); return; }
+          if (!r.ok) return;
+          var d = await r.json();
+          var self = this;
+          if (!Array.isArray(d)) return;
+          d.forEach(function(row) {
+            if (typeof row.health_score === 'number') self.healthScores[row.portco_id] = row.health_score;
+            if (row.latest_kpis && self.cells[row.portco_id]) {
+              Object.entries(row.latest_kpis).forEach(function(entry) {
+                var m = entry[0], info = entry[1];
+                if (!self.cells[row.portco_id][m]) return;
+                var v, p;
+                if (info && typeof info === 'object') { v = info.value; p = info.period; }
+                else { v = info; p = null; }
+                self.cells[row.portco_id][m] = { value: v == null ? '-' : v, period: p || '-' };
+              });
+            }
+          });
+        } catch(e) {}
+      },
+
+      _fetchAlerts: async function(t) {
+        try {
+          var r = await fetch('/api/v1/alerts?tenant_slug='+t+'&limit=20');
+          if (r.status === 401) { this._handleUnauthorized(); return; }
+          if (!r.ok) return;
+          var d = await r.json();
+          var self = this;
+          if (!Array.isArray(d)) return;
+          self.alerts = d.map(function(a) {
+            return {
+              id: self._nextId++,
+              portco_name: self._portcoName(a.portco_id),
+              severity: a.severity, summary: a.summary,
               requires_human: a.requires_human,
               ts: a.created_at || new Date().toISOString(),
-            }));
+            };
+          });
+        } catch(e) {}
+      },
+
+      _fetchAgentRuns: async function(t) {
+        try {
+          var r = await fetch('/api/v1/agent-runs?tenant_slug='+t+'&limit=50');
+          if (r.status === 401) { this._handleUnauthorized(); return; }
+          if (!r.ok) return;
+          var d = await r.json();
+          var self = this;
+          if (!Array.isArray(d) || !d.length) return;
+          var cum = 0;
+          self.costHistory = d.slice().reverse().map(function(run, i) {
+            cum += Number(run.cost_usd || 0);
+            return { t: 'r'+(i+1), cost: +cum.toFixed(4) };
+          });
+          if (_chartInstance) {
+            _chartInstance.data.labels = self.costHistory.map(function(p) { return p.t; });
+            _chartInstance.data.datasets[0].data = self.costHistory.map(function(p) { return p.cost; });
+            _chartInstance.update();
+          }
+        } catch(e) {}
+      },
+
+      _portcoName: function(id) {
+        var found = this.portcos.find(function(p) { return p.id === id; });
+        return found ? found.name : id;
+      },
+
+      _connect: function() {
+        var self = this;
+        try {
+          self._es = new EventSource('/stream/'+encodeURIComponent(self.tenant));
+          self._es.onopen = function() { self.connected = true; self._reconnectAttempt = 0; };
+          self._es.onmessage = function(ev) { self._handleEvent(ev); };
+          self._es.onerror = function() {
+            self.connected = false;
+            if (self._es) { self._es.close(); self._es = null; }
+            self._scheduleReconnect();
+          };
+        } catch(e) {
+          self.connected = false; self._scheduleReconnect();
+        }
+      },
+
+      _scheduleReconnect: function() {
+        var self = this;
+        if (self._reconnectTimer) return;
+        var d = Math.min(1000 * Math.pow(2, self._reconnectAttempt), 30000);
+        self._reconnectAttempt++;
+        self._reconnectTimer = setTimeout(function() { self._reconnectTimer = null; self._connect(); }, d);
+      },
+
+      reconnect: function() {
+        if (this._es) { this._es.close(); this._es = null; }
+        this.connected = false; this._reconnectAttempt = 0;
+        if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+        if (this.token) this._connect();
+      },
+
+      _handleUnauthorized: function() {
+        if (!this.token) return;
+        this.token = '';
+        localStorage.removeItem('pp_auth');
+        if (this._es) { this._es.close(); this._es = null; }
+        this.connected = false;
+        this.authError = 'session expired';
+      },
+
+      _handleEvent: function(ev) {
+        var data;
+        try { data = JSON.parse(ev.data); } catch(e) { return; }
+        var self = this;
+        switch (data.type) {
+          case 'connected': self.connected = true; break;
+          case 'kpi_received':
+            var p = data.payload || {};
+            if (p.portco_id && self.cells[p.portco_id] && p.metric)
+              self.cells[p.portco_id][p.metric] = { value: p.value, period: p.period || '-' };
+            break;
+          case 'pipeline_started':
+            self._addActivity({ agent: 'pipeline', status: 'started', thread_id: data.session_id || null });
+            break;
+          case 'agent_started':
+            self.activeAgents[data.thread_id] = { agent: data.agent_name, started_at: Date.now() };
+            self._addActivity({ agent: data.agent_name, status: 'started', thread_id: data.thread_id });
+            break;
+          case 'agent_completed':
+            var e = self.activeAgents[data.thread_id];
+            var dur = e ? Date.now() - e.started_at : null;
+            if (e) delete self.activeAgents[data.thread_id];
+            self._addActivity({ agent: data.agent_name, status: 'completed', thread_id: data.thread_id, duration_ms: dur });
+            break;
+          case 'pipeline_completed':
+            self._onPipelineCompleted(data);
+            break;
+        }
+      },
+
+      _onPipelineCompleted: function(data) {
+        var self = this;
+        var last = self.costHistory[self.costHistory.length - 1];
+        var next = +((last ? last.cost : 0) + 0.06).toFixed(3);
+        self.costHistory.push({ t: 'r'+(self.costHistory.length+1), cost: next });
+        if (self.costHistory.length > 10) self.costHistory.shift();
+        self._updateChart();
+
+        var v = self._extractSeverityJson(data.output || '');
+        var portcoId = v && v.portco_id ? v.portco_id : data.portco_id;
+        var portco = self.portcos.find(function(p) { return p.id === portcoId; }) || self.portcos[0];
+
+        if (v) {
+          self._pushAlert({
+            portco_id: portco.id, portco_name: portco.name,
+            severity: (v.severity || 'info').toLowerCase(),
+            summary: v.summary || v.rationale || '(no summary)',
+            requires_human: !!v.requires_human,
+          });
+          var sev = (v.severity || '').toLowerCase();
+          if      (sev === 'urgent')    self.healthScores[portco.id] = Math.max(15, self.healthScores[portco.id] - 35);
+          else if (sev === 'attention') self.healthScores[portco.id] = Math.max(40, self.healthScores[portco.id] - 15);
+        } else {
+          self._pushAlert({
+            portco_id: portco.id, portco_name: portco.name,
+            severity: 'info', summary: 'Pipeline completed — no anomaly detected.',
+            requires_human: false,
+          });
+        }
+        self._addActivity({ agent: 'coordinator', status: 'completed', thread_id: data.session_id });
+      },
+
+      _extractSeverityJson: function(text) {
+        if (!text) return null;
+        var m = text.match(/\{[\s\S]*\}/);
+        if (!m) return null;
+        try { var p = JSON.parse(m[0]); if (p && p.severity) return p; } catch(e) {}
+        return null;
+      },
+
+      _pushAlert: function(a) {
+        var item = Object.assign({ id: this._nextId++, ts: Date.now() }, a);
+        this.alerts = [item].concat(this.alerts).slice(0, 50);
+      },
+
+      _addActivity: function(a) {
+        var item = Object.assign({ id: this._nextId++, ts: Date.now(), duration_ms: null }, a);
+        this.activities = [item].concat(this.activities).slice(0, 30);
+      },
+
+      triggerTestAlert: async function() {
+        if (!this.token) return;
+        this.sendingTest = true;
+        try {
+          var r = await fetch('/webhook/'+encodeURIComponent(this.tenant), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ portco_id:'portco-1', metric:'revenue', value:3.1, period:'2026-04' }),
+          });
+          if (r.status === 401) this._handleUnauthorized();
+        } catch(e) {}
+        var self = this;
+        setTimeout(function() { self.sendingTest = false; }, 600);
+      },
+
+      login: async function() {
+        var self = this;
+        self.loggingIn = true;
+        self.authError = '';
+        try {
+          var r = await fetch('/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: self.loginEmail, password: self.loginPassword }),
+          });
+          if (!r.ok) {
+            self.authError = r.status === 401 ? 'invalid credentials' : ('http '+r.status);
+            return;
+          }
+          var body = await r.json();
+          self.token = body && body.access_token ? '1' : '';
+          if (!self.token) { self.authError = 'no token'; return; }
+          localStorage.setItem('pp_auth', self.token);
+          localStorage.setItem('pp_email', self.loginEmail);
+          self.loginPassword = '';
+          self.reconnect();
+          self._loadInitialData();
+        } catch(e) {
+          self.authError = 'network error';
+        } finally {
+          self.loggingIn = false;
+        }
+      },
+
+      logout: function() {
+        var self = this;
+        self.token = '';
+        fetch('/auth/logout', { method: 'POST' }).catch(function() {});
+        localStorage.removeItem('pp_auth');
+        if (self._es) { self._es.close(); self._es = null; }
+        self.connected = false;
+        self.alerts = [];
+        self.activities = [];
+        self.authError = '';
+      },
+
+      _buildChart: function() {
+        var el = document.getElementById('costChart');
+        if (!el || typeof Chart === 'undefined') return;
+        if (_chartInstance) return;
+        var existing = Chart.getChart(el);
+        if (existing) { _chartInstance = existing; return; }
+        var self = this;
+        _chartInstance = new Chart(el, {
+          type: 'line',
+          data: {
+            labels: self.costHistory.map(function(p) { return p.t; }),
+            datasets: [{
+              data: self.costHistory.map(function(p) { return p.cost; }),
+              borderColor: '#1f56b8',
+              backgroundColor: 'transparent',
+              fill: false,
+              tension: 0,
+              pointRadius: 2,
+              pointHoverRadius: 4,
+              pointBackgroundColor: '#1f56b8',
+              borderWidth: 1.5,
+            }],
           },
-
-          async _fetchAgentRuns(tenant) {
-            const res = await fetch(`/api/v1/agent-runs?tenant_slug=${tenant}&limit=50`, {
-              headers: this._authHeaders(),
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            if (!Array.isArray(data) || !data.length) return;
-            // Build cumulative cost timeline (oldest -> newest)
-            const sorted = [...data].reverse();
-            let cum = 0;
-            this.costHistory = sorted.map((r, i) => {
-              cum += Number(r.cost_usd || 0);
-              return { t: `run-${i + 1}`, cost: +cum.toFixed(4) };
-            });
-            if (this._chart) {
-              this._chart.data.labels = this.costHistory.map((p) => p.t);
-              this._chart.data.datasets[0].data = this.costHistory.map((p) => p.cost);
-              this._chart.update();
-            }
-          },
-
-          _portcoName(id) {
-            const p = this.portcos.find((x) => x.id === id);
-            return p ? p.name : id;
-          },
-
-          // --- SSE ---
-          _connect() {
-            if (!this.token) return;
-            try {
-              const url = `/stream/${encodeURIComponent(this.tenant)}`;
-              this._es = new EventSource(url);
-
-              this._es.onopen = () => {
-                this.connected = true;
-                this._reconnectAttempt = 0;
-              };
-
-              this._es.onmessage = (ev) => this._handleEvent(ev);
-
-              this._es.onerror = () => {
-                this.connected = false;
-                this._es && this._es.close();
-                this._es = null;
-                this._scheduleReconnect();
-              };
-            } catch (err) {
-              console.error('SSE connect failed', err);
-              this.connected = false;
-              this._scheduleReconnect();
-            }
-          },
-
-          _scheduleReconnect() {
-            if (this._reconnectTimer) return;
-            const delay = Math.min(1000 * 2 ** this._reconnectAttempt, 30000);
-            this._reconnectAttempt += 1;
-            this._reconnectTimer = setTimeout(() => {
-              this._reconnectTimer = null;
-              this._connect();
-            }, delay);
-          },
-
-          reconnect() {
-            if (this._es) {
-              this._es.close();
-              this._es = null;
-            }
-            this.connected = false;
-            this._reconnectAttempt = 0;
-            if (this._reconnectTimer) {
-              clearTimeout(this._reconnectTimer);
-              this._reconnectTimer = null;
-            }
-            if (this.token) {
-              this._connect();
-              this._loadInitialData();
-            }
-          },
-
-          _handleEvent(ev) {
-            let data;
-            try {
-              data = JSON.parse(ev.data);
-            } catch {
-              return;
-            }
-            switch (data.type) {
-              case 'connected':
-                this.connected = true;
-                break;
-
-              case 'kpi_received': {
-                const p = data.payload || {};
-                if (p.portco_id && this.cells[p.portco_id] && p.metric) {
-                  this.cells[p.portco_id][p.metric] = {
-                    value: p.value,
-                    period: p.period || '-',
-                  };
-                }
-                break;
-              }
-
-              case 'pipeline_started':
-                this._addActivity({
-                  agent: 'pipeline',
-                  status: 'started',
-                  thread_id: data.session_id || null,
-                });
-                break;
-
-              case 'agent_started':
-                this.activeAgents[data.thread_id] = {
-                  agent: data.agent_name,
-                  started_at: Date.now(),
-                };
-                this._addActivity({
-                  agent: data.agent_name,
-                  status: 'started',
-                  thread_id: data.thread_id,
-                });
-                break;
-
-              case 'agent_completed': {
-                const entry = this.activeAgents[data.thread_id];
-                let dur = null;
-                if (entry) {
-                  dur = Date.now() - entry.started_at;
-                  delete this.activeAgents[data.thread_id];
-                }
-                this._addActivity({
-                  agent: data.agent_name,
-                  status: 'completed',
-                  thread_id: data.thread_id,
-                  duration_ms: dur,
-                });
-                break;
-              }
-
-              case 'pipeline_completed':
-                this._onPipelineCompleted(data);
-                break;
-            }
-          },
-
-          // --- pipeline_completed -> alert + cost ---
-          _onPipelineCompleted(data) {
-            // 1. cost increment
-            const next = +((this.costHistory[this.costHistory.length - 1]?.cost || 0) + 0.06).toFixed(3);
-            this.costHistory.push({ t: `run-${this.costHistory.length + 1}`, cost: next });
-            if (this.costHistory.length > 10) this.costHistory.shift();
-            this._updateChart();
-
-            // 2. parse SeverityClassifier JSON from output
-            const verdict = this._extractSeverityJson(data.output || '');
-            const portcoId = verdict?.portco_id || data.portco_id || 'portco-1';
-            const portco = this.portcos.find((p) => p.id === portcoId) || this.portcos[0];
-
-            if (verdict) {
-              this._pushAlert({
-                portco_id: portco.id,
-                portco_name: portco.name,
-                severity: (verdict.severity || 'info').toLowerCase(),
-                summary: verdict.summary || verdict.rationale || '(no summary)',
-                requires_human: !!verdict.requires_human,
-              });
-
-              // update health score based on severity
-              const sev = (verdict.severity || '').toLowerCase();
-              if (sev === 'urgent') this.healthScores[portco.id] = Math.max(15, this.healthScores[portco.id] - 35);
-              else if (sev === 'attention') this.healthScores[portco.id] = Math.max(40, this.healthScores[portco.id] - 15);
-            } else {
-              this._pushAlert({
-                portco_id: portco.id,
-                portco_name: portco.name,
-                severity: 'info',
-                summary: 'Pipeline completed - NORMAL (no anomaly detected).',
-                requires_human: false,
-              });
-            }
-
-            this._addActivity({
-              agent: 'coordinator',
-              status: 'completed',
-              thread_id: data.session_id,
-            });
-          },
-
-          _extractSeverityJson(text) {
-            if (!text) return null;
-            const match = text.match(/\{[\s\S]*\}/);
-            if (!match) return null;
-            try {
-              const parsed = JSON.parse(match[0]);
-              if (parsed && typeof parsed === 'object' && 'severity' in parsed) return parsed;
-            } catch {}
-            return null;
-          },
-
-          _pushAlert(a) {
-            this.alerts = [
-              { id: this._nextId++, ts: Date.now(), ...a },
-              ...this.alerts,
-            ].slice(0, 50);
-          },
-
-          _addActivity(a) {
-            this.activities = [
-              { id: this._nextId++, ts: Date.now(), duration_ms: null, ...a },
-              ...this.activities,
-            ].slice(0, 30);
-          },
-
-          // --- test alert button ---
-          async triggerTestAlert() {
-            if (!this.token) return;
-            this.sendingTest = true;
-            try {
-              const res = await fetch(`/webhook/${encodeURIComponent(this.tenant)}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this._authHeaders() },
-                body: JSON.stringify({
-                  portco_id: 'portco-1',
-                  metric: 'revenue',
-                  value: 3.1,
-                  period: '2026-04',
-                }),
-              });
-              if (!res.ok) console.warn('webhook returned', res.status);
-            } catch (err) {
-              console.error('trigger failed', err);
-            } finally {
-              setTimeout(() => (this.sendingTest = false), 600);
-            }
-          },
-
-          async login() {
-            this.loggingIn = true;
-            try {
-              const res = await fetch('/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  email: this.loginEmail,
-                  password: this.loginPassword,
-                }),
-              });
-              if (!res.ok) return;
-              const body = await res.json();
-              this.token = body.access_token ? '1' : '';
-              localStorage.setItem('portfolioPulseAuthenticated', this.token);
-              localStorage.setItem('portfolioPulseEmail', this.loginEmail);
-              this.reconnect();
-            } finally {
-              this.loggingIn = false;
-            }
-          },
-
-          logout() {
-            this.token = '';
-            fetch('/auth/logout', { method: 'POST' }).catch(() => {});
-            localStorage.removeItem('portfolioPulseAuthenticated');
-            if (this._es) {
-              this._es.close();
-              this._es = null;
-            }
-            this.connected = false;
-          },
-
-          _authHeaders() {
-            return {};
-          },
-
-          // --- chart ---
-          _buildChart() {
-            const ctx = document.getElementById('costChart');
-            if (!ctx || typeof Chart === 'undefined') return;
-            this._chart = new Chart(ctx, {
-              type: 'line',
-              data: {
-                labels: this.costHistory.map((p) => p.t),
-                datasets: [
-                  {
-                    label: 'Cumulative cost (USD)',
-                    data: this.costHistory.map((p) => p.cost),
-                    borderColor: '#818cf8',
-                    backgroundColor: 'rgba(129, 140, 248, 0.15)',
-                    fill: true,
-                    tension: 0.35,
-                    pointRadius: 3,
-                    pointHoverRadius: 5,
-                    borderWidth: 2,
-                  },
-                ],
-              },
-              options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: { labels: { color: '#cbd5e1' } },
-                  tooltip: { callbacks: { label: (c) => `$${c.parsed.y.toFixed(3)}` } },
-                },
-                scales: {
-                  x: { ticks: { color: '#94a3b8' }, grid: { color: '#1f2937' } },
-                  y: {
-                    ticks: { color: '#94a3b8', callback: (v) => `$${v}` },
-                    grid: { color: '#1f2937' },
-                    beginAtZero: true,
-                  },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#0d1729',
+                borderColor: 'rgba(255,255,255,0.12)', borderWidth: 1,
+                titleColor: '#6a82a8', bodyColor: '#dde6f5',
+                padding: 8, cornerRadius: 0,
+                callbacks: {
+                  label: function(c) { return ' $'+c.parsed.y.toFixed(3); }
                 },
               },
-            });
+            },
+            scales: {
+              x: {
+                ticks: { color: '#96a3b8', font: { family: "'JetBrains Mono'", size: 9.5 }, maxRotation: 0 },
+                grid:  { color: 'rgba(0,0,0,0.06)' },
+                border:{ color: 'rgba(0,0,0,0.10)' },
+              },
+              y: {
+                ticks: {
+                  color: '#96a3b8', font: { family: "'JetBrains Mono'", size: 9.5 },
+                  callback: function(v) { return '$'+v; },
+                },
+                grid:  { color: 'rgba(0,0,0,0.06)' },
+                border:{ color: 'rgba(0,0,0,0.10)' },
+                beginAtZero: true,
+              },
+            },
           },
+        });
+      },
 
-          _updateChart() {
-            if (!this._chart) return;
-            this._chart.data.labels = this.costHistory.map((p) => p.t);
-            this._chart.data.datasets[0].data = this.costHistory.map((p) => p.cost);
-            this._chart.update('none');
-          },
+      _updateChart: function() {
+        if (!_chartInstance) return;
+        var self = this;
+        _chartInstance.data.labels = self.costHistory.map(function(p) { return p.t; });
+        _chartInstance.data.datasets[0].data = self.costHistory.map(function(p) { return p.cost; });
+        _chartInstance.update('none');
+      },
 
-          // --- helpers ---
-          cellColor(score) {
-            if (score == null) return 'bg-slate-700/30 text-slate-300';
-            if (score >= 80) return 'bg-emerald-600/30 text-emerald-100 border border-emerald-700/40';
-            if (score >= 50) return 'bg-amber-600/30 text-amber-100 border border-amber-700/40';
-            return 'bg-red-600/30 text-red-100 border border-red-700/40';
-          },
-          cellValue(portcoId, metric) {
-            const c = this.cells[portcoId]?.[metric];
-            if (!c || c.value === '-' || c.value == null) return '-';
-            return typeof c.value === 'number' ? c.value : String(c.value);
-          },
-          cellPeriod(portcoId, metric) {
-            return this.cells[portcoId]?.[metric]?.period || '-';
-          },
-          severityEmoji(sev) {
-            const map = { urgent: '!', attention: '~', info: 'i' };
-            return map[sev] || 'i';
-          },
-          severityBorder(sev) {
-            const map = {
-              urgent: 'border-red-700/50',
-              attention: 'border-amber-700/50',
-              info: 'border-slate-700/50',
-            };
-            return map[sev] || 'border-slate-700/50';
-          },
-          severityBadge(sev) {
-            const map = {
-              urgent: 'bg-red-900/60 text-red-200 border border-red-700',
-              attention: 'bg-amber-900/60 text-amber-200 border border-amber-700',
-              info: 'bg-slate-700/60 text-slate-300 border border-slate-600',
-            };
-            return map[sev] || map.info;
-          },
-          agentColor(agent) {
-            if (!agent) return 'bg-slate-500';
-            const a = agent.toLowerCase();
-            if (a.includes('anomaly')) return 'bg-blue-400';
-            if (a.includes('context')) return 'bg-emerald-400';
-            if (a.includes('severity')) return 'bg-purple-400';
-            if (a.includes('coordinator')) return 'bg-orange-400';
-            if (a.includes('pipeline')) return 'bg-indigo-400';
-            return 'bg-slate-400';
-          },
-          formatTime(ts) {
-            const d = new Date(ts);
-            return d.toTimeString().slice(0, 8);
-          },
-          relativeTime(ts) {
-            const then = typeof ts === 'number' ? ts : new Date(ts).getTime();
-            const sec = Math.max(1, Math.floor((Date.now() - then) / 1000));
-            if (sec < 60) return `${sec}s ago`;
-            const min = Math.floor(sec / 60);
-            if (min < 60) return `${min} min ago`;
-            const h = Math.floor(min / 60);
-            if (h < 24) return `${h}h ago`;
-            return `${Math.floor(h / 24)}d ago`;
-          },
-        };
-      }
-    </script>
-  </body>
+      metricLabel: function(m) {
+        var map = { revenue:'Revenue', burn:'Burn', churn_pct:'Churn%' };
+        return map[m] || m;
+      },
+      cellValClass: function(portcoId) {
+        var s = this.healthScores[portcoId];
+        if (s == null) return '';
+        if (s >= 80) return 'g';
+        if (s >= 50) return 'a';
+        return 'r';
+      },
+      cellValue: function(portcoId, metric) {
+        var c = this.cells[portcoId] && this.cells[portcoId][metric];
+        if (!c || c.value === '-' || c.value == null) return '—';
+        return typeof c.value === 'number' ? c.value : String(c.value);
+      },
+      cellPeriod: function(portcoId, metric) {
+        var c = this.cells[portcoId] && this.cells[portcoId][metric];
+        var p = c && c.period;
+        return (!p || p === '-') ? '' : p;
+      },
+      scoreClass: function(s) {
+        if (s == null) return '';
+        if (s >= 80) return 'g';
+        if (s >= 50) return 'a';
+        return 'r';
+      },
+      agentDotCls: function(agent) {
+        if (!agent) return 'def';
+        var a = agent.toLowerCase();
+        if (a.indexOf('anomaly')     >= 0) return 'anomaly';
+        if (a.indexOf('context')     >= 0) return 'context';
+        if (a.indexOf('severity')    >= 0) return 'severity';
+        if (a.indexOf('coordinator') >= 0) return 'coordinator';
+        if (a.indexOf('pipeline')    >= 0) return 'pipeline';
+        return 'def';
+      },
+      formatTime: function(ts) {
+        var t = typeof ts === 'number' ? ts : new Date(ts).getTime();
+        if (!t || isNaN(t)) return '—';
+        return new Date(t).toTimeString().slice(0,8);
+      },
+      relativeTime: function(ts) {
+        var t = typeof ts === 'number' ? ts : new Date(ts).getTime();
+        if (!t || isNaN(t)) return '';
+        var s = Math.max(1, Math.floor((Date.now()-t)/1000));
+        if (s < 60) return s+'s';
+        var m = Math.floor(s/60);
+        if (m < 60) return m+'m';
+        var h = Math.floor(m/60);
+        return h < 24 ? h+'h' : Math.floor(h/24)+'d';
+      },
+    };
+  }
+</script>
+</body>
 </html>
