@@ -19,7 +19,7 @@ from app.config import settings  # noqa: F401  (forces .env validation at startu
 from app.db import SessionLocal
 from app.event_bus import emit, get_queue
 from app.models.entities import KpiSnapshot, Tenant
-from app.services.rbac import current_user, decode_token
+from app.services.rbac import JWT_COOKIE_NAME, current_user, decode_token
 from app.telemetry import init_tracing
 
 
@@ -71,7 +71,7 @@ def _has_ingest_token(request: Request) -> bool:
 def _authorize_webhook(request: Request, tenant_id: str) -> None:
     if _has_ingest_token(request):
         return
-    token = _auth_bearer(request)
+    token = _auth_bearer(request) or request.cookies.get(JWT_COOKIE_NAME)
     if not token:
         raise HTTPException(status_code=401, detail="missing webhook token")
     user = decode_token(token)
