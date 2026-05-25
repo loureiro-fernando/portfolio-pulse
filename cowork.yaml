@@ -117,4 +117,4 @@ observability:
 notes: |
   Cost: ~$0.06 per anomaly pipeline run with Haiku 4.5. Use Sonnet 4.6 (~$0.10/run) for demos only.
   Recommended Anthropic workspace spending cap: USD 30.
-  See README.md "Coverage of Mavila JD requirements" for full skill mapping.
+  See README.md "Coverage of target JD requirements" for full skill mapping.
